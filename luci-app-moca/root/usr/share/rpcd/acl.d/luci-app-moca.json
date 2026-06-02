@@ -1,0 +1,10 @@
+{
+	"luci-app-moca": {
+		"description": "Grant read access to MoCA PHY sysfs",
+		"read": {
+			"file": {
+				"/sys/devices/platform/*/mdio_bus/*/*:0f/moca_*": [ "read" ]
+			}
+		}
+	}
+}
