@@ -1,0 +1,6 @@
+<svg width="32" height="32" version="1.1" viewBox="0 0 48 48" xmlns="http://www.w3.org/2000/svg" opacity=".6">
+  <!-- LC optical connector, viewed end-on (inactive) -->
+  <rect x="9" y="11" width="30" height="26" rx="3" fill="#d4d6e2" stroke="#9aa0bd" stroke-width="1.5"/>
+  <circle cx="24" cy="24" r="10" fill="#f2f3f8" stroke="#c2c6d6" stroke-width="1"/>
+  <circle cx="24" cy="24" r="3" fill="#aab0c4" stroke="#9aa0bd" stroke-width=".8"/>
+</svg>
