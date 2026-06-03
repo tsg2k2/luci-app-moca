@@ -1,0 +1,31 @@
+diff --git a/modules/luci-base/htdocs/luci-static/resources/network.js b/modules/luci-base/htdocs/luci-static/resources/network.js
+index 4d519b002a..1b2e987d4a 100644
+--- a/modules/luci-base/htdocs/luci-static/resources/network.js
++++ b/modules/luci-base/htdocs/luci-static/resources/network.js
+@@ -2979,7 +2979,12 @@ Device = baseclass.extend(/** @lends LuCI.network.Device.prototype */ {
+ 	 *  - `ethernet` for all other device types
+ 	 */
+ 	getType() {
+-		if (this.device != null && this.device.charAt(0) == '@')
++		var medium = (this.dev != null) ? this.dev.port : null;
++		if (medium == 'bnc' || /^moca\d*$/.test(this.device))
++			return 'coax';
++		else if (medium == 'fibre')
++			return 'fiber';
++		else if (this.device != null && this.device.charAt(0) == '@')
+ 			return 'alias';
+ 		else if (this.dev.devtype == 'wlan' || this.wif != null || isWifiIfname(this.device))
+ 			return 'wifi';
+@@ -3069,6 +3074,12 @@ Device = baseclass.extend(/** @lends LuCI.network.Device.prototype */ {
+ 		case 'tunnel':
+ 			return _('Tunnel Interface');
+ 
++		case 'coax':
++			return _('MoCA (coax)');
++
++		case 'fiber':
++			return _('Fiber');
++
+ 		default:
+ 			return _('Ethernet Adapter');
+ 		}
