@@ -1,0 +1,10 @@
+config moca 'settings'
+	# Set to 1 to push these settings to the MoCA SoC at boot and on save.
+	option enabled '0'
+	option lof '1150'
+	option preferred_nc '1'
+	option network_search '0'
+	option security_mode '0'
+	option beacon_tx_power '10'
+	option max_tx_power '10'
+	option freq_band_mask '1'
