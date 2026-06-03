@@ -46,6 +46,13 @@ return view.extend({
 		o.datatype = 'and(uinteger,minlength(1),maxlength(17))';
 		o.depends('security_mode', '1');
 
+		o = s.option(form.Value, 'enhanced_password', _('Enhanced privacy password'),
+			_('Up to 64 digits, for MoCA enhanced privacy.'));
+		o.password = true;
+		o.datatype = 'and(uinteger,minlength(1),maxlength(64))';
+		o.depends('security_mode', '1');
+		o.optional = true;
+
 		o = s.option(form.Value, 'beacon_tx_power', _('Beacon TX power'));
 		o.datatype = 'range(0,255)';
 
