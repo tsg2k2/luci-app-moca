@@ -42,8 +42,9 @@ moca_stage_secret() {
 }
 
 moca_apply_config() {
-	local enabled lof preferred_nc network_search security_mode
-	local password enhanced_password beacon_tx_power max_tx_power freq_band_mask
+	local enabled lof preferred_nc network_search security_mode network_name
+	local password enhanced_password enhanced_privacy_mode
+	local beacon_tx_power max_tx_power freq_band_mask
 
 	MOCA_DIR=$(moca_sysfs_dir) || {
 		logger -t moca "MoCA sysfs not present; skipping config apply"
@@ -58,8 +59,10 @@ moca_apply_config() {
 	config_get preferred_nc   settings preferred_nc
 	config_get network_search settings network_search
 	config_get security_mode  settings security_mode
+	config_get network_name   settings network_name
 	config_get password       settings password
 	config_get enhanced_password settings enhanced_password
+	config_get enhanced_privacy_mode settings enhanced_privacy_mode
 	config_get beacon_tx_power settings beacon_tx_power
 	config_get max_tx_power   settings max_tx_power
 	config_get freq_band_mask settings freq_band_mask
@@ -69,6 +72,8 @@ moca_apply_config() {
 	moca_stage moca_cfg_preferred_nc   "$preferred_nc"
 	moca_stage moca_cfg_network_search "$network_search"
 	moca_stage moca_cfg_security_mode  "$security_mode"
+	moca_stage moca_cfg_network_name   "$network_name"
+	moca_stage moca_cfg_enhanced_privacy_mode "$enhanced_privacy_mode"
 	moca_stage moca_cfg_beacon_tx_power "$beacon_tx_power"
 	moca_stage moca_cfg_max_tx_power   "$max_tx_power"
 	moca_stage moca_cfg_freq_band_mask "$freq_band_mask"

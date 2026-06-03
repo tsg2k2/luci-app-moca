@@ -29,6 +29,11 @@ return view.extend({
 		o.datatype = 'range(0,1600)';
 		o.placeholder = '1150';
 
+		o = s.option(form.Value, 'network_name', _('Network name'),
+			_('Optional MoCA network identifier (up to 32 characters).'));
+		o.datatype = 'maxlength(32)';
+		o.optional = true;
+
 		o = s.option(form.Flag, 'preferred_nc', _('Prefer Network Coordinator'),
 			_('Prefer this node to become the MoCA Network Coordinator.'));
 
@@ -45,6 +50,19 @@ return view.extend({
 		o.password = true;
 		o.datatype = 'and(uinteger,minlength(1),maxlength(17))';
 		o.depends('security_mode', '1');
+
+		o = s.option(form.ListValue, 'enhanced_privacy_mode', _('Enhanced privacy mode'),
+			_('Enhanced privacy level (0 = off).'));
+		o.value('0', _('Off'));
+		o.value('1', '1');
+		o.value('2', '2');
+		o.value('3', '3');
+		o.value('4', '4');
+		o.value('5', '5');
+		o.value('6', '6');
+		o.value('7', '7');
+		o.depends('security_mode', '1');
+		o.optional = true;
 
 		o = s.option(form.Value, 'enhanced_password', _('Enhanced privacy password'),
 			_('Up to 64 digits, for MoCA enhanced privacy.'));
