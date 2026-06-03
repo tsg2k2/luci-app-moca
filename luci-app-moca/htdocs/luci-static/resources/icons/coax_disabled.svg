@@ -1,0 +1,8 @@
+<svg width="32" height="32" version="1.1" viewBox="0 0 48 48" xmlns="http://www.w3.org/2000/svg" opacity=".6">
+  <!-- coaxial F-connector, viewed end-on (inactive) -->
+  <polygon points="24,4 39,13 39,35 24,44 9,35 9,13" fill="#c4c7c0" stroke="#babdb6" stroke-width="1.5" stroke-linejoin="round"/>
+  <circle cx="24" cy="24" r="14" fill="#dee1da" stroke="#babdb6" stroke-width="1"/>
+  <circle cx="24" cy="24" r="9" fill="#f2f2f0" stroke="#d3d7cf" stroke-width="1"/>
+  <circle cx="24" cy="24" r="5.4" fill="#b0b3ad"/>
+  <circle cx="24" cy="24" r="2.6" fill="#d3d7cf" stroke="#babdb6" stroke-width=".8"/>
+</svg>
