@@ -14,10 +14,31 @@ moca_sysfs_dir() {
 	return 1
 }
 
-# moca_stage <sysfs-attr> <value>  (no-op when value is empty)
+# MOCA_CHANGED is set to 1 by moca_stage* when a staged value differs from the
+# value already programmed in the driver, so we only re-initialise the SoC (a
+# multi-second coax drop) when the config actually changed.
+
+# moca_stage <sysfs-attr> <value>  (readable attr: stage + detect change)
 moca_stage() {
+	local cur
 	[ -n "$2" ] || return 0
-	echo "$2" > "$MOCA_DIR/$1" 2>/dev/null
+	cur=$(cat "$MOCA_DIR/$1" 2>/dev/null)
+	if ! echo "$2" > "$MOCA_DIR/$1" 2>/dev/null; then
+		logger -t moca "failed to stage $1='$2' (rejected by driver)"
+		return 0
+	fi
+	[ "$cur" != "$2" ] && MOCA_CHANGED=1
+}
+
+# moca_stage_secret <sysfs-attr> <value>  (write-only attr: can't read back, so
+# any non-empty value forces an apply)
+moca_stage_secret() {
+	[ -n "$2" ] || return 0
+	if ! echo "$2" > "$MOCA_DIR/$1" 2>/dev/null; then
+		logger -t moca "failed to stage $1 (rejected by driver)"
+		return 0
+	fi
+	MOCA_CHANGED=1
 }
 
 moca_apply_config() {
@@ -43,17 +64,24 @@ moca_apply_config() {
 	config_get max_tx_power   settings max_tx_power
 	config_get freq_band_mask settings freq_band_mask
 
+	MOCA_CHANGED=0
 	moca_stage moca_cfg_lof            "$lof"
 	moca_stage moca_cfg_preferred_nc   "$preferred_nc"
 	moca_stage moca_cfg_network_search "$network_search"
 	moca_stage moca_cfg_security_mode  "$security_mode"
-	moca_stage moca_cfg_password       "$password"
-	moca_stage moca_cfg_enhanced_password "$enhanced_password"
 	moca_stage moca_cfg_beacon_tx_power "$beacon_tx_power"
 	moca_stage moca_cfg_max_tx_power   "$max_tx_power"
 	moca_stage moca_cfg_freq_band_mask "$freq_band_mask"
+	moca_stage_secret moca_cfg_password          "$password"
+	moca_stage_secret moca_cfg_enhanced_password "$enhanced_password"
 
-	# Commit: re-initialise the SoC with the staged config (brief coax drop).
+	# Only re-admit (multi-second coax drop) when something actually changed
+	# from what the driver already applied at boot.
+	if [ "$MOCA_CHANGED" != 1 ]; then
+		logger -t moca "MoCA config matches running state; no re-init"
+		return 0
+	fi
+
 	echo 1 > "$MOCA_DIR/moca_cfg_apply" 2>/dev/null
 	logger -t moca "Applied MoCA configuration"
 }
