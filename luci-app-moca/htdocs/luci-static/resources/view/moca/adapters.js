@@ -353,9 +353,13 @@ return view.extend({
 		o.default = 'frontier';
 		o = s.option(form.Value, 'username', _('Web user'));
 		o.placeholder = 'admin';
+		o.description = _('Leave blank to use the selected vendor\'s default.');
 		o.modalonly = true;
 		o = s.option(form.Value, 'password', _('Web password'));
 		o.password = true;
+		o.placeholder = _('(vendor default)');
+		o.description = _('Override only if this adapter\'s web password differs from ' +
+			'the manufacturer default (Frontier=cambridge, GoCoax=gocoaxx, Verizon=admin).');
 		o.modalonly = true;
 		o = s.option(form.Value, 'mac', _('MoCA GUID / MAC'));
 		o.placeholder = 'aa:bb:cc:dd:ee:ff';

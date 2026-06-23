@@ -56,6 +56,18 @@ basic_hdr() {
 	printf 'Authorization: Basic %s' "$(b64enc "$1")"
 }
 
+# Known factory web credentials per vendor profile ("user:pass").  Used as the
+# fallback when an adapter has no explicit password configured, so the user
+# only has to override the ones that differ from the manufacturer default.
+vendor_default_cred() {
+	case "$1" in
+		frontier) echo "admin:cambridge" ;;
+		gocoax)   echo "admin:gocoaxx" ;;
+		verizon)  echo "admin:admin" ;;
+		*)        echo "admin:" ;;
+	esac
+}
+
 # Build the credential list to try while probing: every distinct user:pass
 # already configured in the inventory, then the per-vendor factory defaults.
 discover_creds() {
@@ -359,14 +371,20 @@ method_request() {
 	# Resolve target + creds strictly from UCI (never from the caller).
 	. /lib/functions.sh
 	config_load "$CFG"
-	local host username password enabled tmo
+	local host username password vendor enabled tmo
 	config_get host     "$id" host ""
-	config_get username "$id" username "admin"
+	config_get username "$id" username ""
 	config_get password "$id" password ""
+	config_get vendor   "$id" vendor "generic"
 	config_get enabled  "$id" enabled 1
 	[ -n "$host" ] || {
 		json_init; json_add_string error "unknown adapter"; json_dump; return
 	}
+
+	# Credentials: per-adapter override if set, else the vendor factory default.
+	local def; def="$(vendor_default_cred "$vendor")"
+	[ -n "$username" ] || username="${def%%:*}"
+	[ -n "$password" ] || password="${def#*:}"
 	[ "$enabled" = 1 ] || {
 		json_init; json_add_string error "adapter disabled"; json_dump; return
 	}
@@ -381,14 +399,32 @@ method_request() {
 	[ -n "$body" ] || body='{"data":[]}'
 	tmo="$(cfg_timeout)"
 
-	# Split the body from the HTTP code with a literal token (ash has no $'\n').
-	local out code raw
-	out="$(curl -s -m "$tmo" -w '___CODE___%{http_code}' \
+	# Writes (PUT / action endpoints) need the csrf_token cookie echoed back in
+	# an X-CSRF-TOKEN header; reads (.../GET) don't.  Fetch it from the adapter
+	# root first (newer firmware enforces it; older firmware just ignores it).
+	local jar="" tok=""
+	case "$path" in
+		*/GET) ;;
+		*)
+			jar="/tmp/.moca_csrf.$$"
+			curl -s -m "$tmo" -c "$jar" -H "$(basic_hdr "$username:$password")" \
+				-o /dev/null "http://$host/" 2>/dev/null
+			tok="$(awk '/csrf_token/{print $7}' "$jar" 2>/dev/null)"
+		;;
+	esac
+
+	# Build the curl argv via positional params (keeps the header's space safe).
+	set -- -s -m "$tmo" -w '___CODE___%{http_code}' \
 		-H "$(basic_hdr "$username:$password")" \
 		-H 'Content-Type: application/x-www-form-urlencoded' \
-		-H 'Accept: text/html, */*' \
-		--data "$body" \
-		-X POST "http://$host/ms/$path" 2>/dev/null)"
+		-H 'Accept: text/html, */*'
+	[ -n "$tok" ] && set -- "$@" -b "$jar" -H "X-CSRF-TOKEN: $tok"
+	set -- "$@" --data "$body" -X POST "http://$host/ms/$path"
+
+	# Split the body from the HTTP code with a literal token (ash has no $'\n').
+	local out code raw
+	out="$(curl "$@" 2>/dev/null)"
+	[ -n "$jar" ] && rm -f "$jar"
 
 	code="${out##*___CODE___}"
 	raw="${out%%___CODE___*}"
