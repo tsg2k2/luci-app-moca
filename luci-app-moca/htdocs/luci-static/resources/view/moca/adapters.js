@@ -51,7 +51,48 @@ function readStatus(id, bank, pid, node) {
 function writeCfg(id, bank, pid, value) {
 	return ms(id, bank + '/' + pid + '/PUT', '{"data":[' + value + ']}');
 }
+/* write several 32-bit words (e.g. an ASCII string field) */
+function writeCfgWords(id, bank, pid, words) {
+	return ms(id, bank + '/' + pid + '/PUT', '{"data":[' + words.join(',') + ']}');
+}
 function action(id, path) { return ms(id, path, '{"data":[]}'); }
+
+/* IPv4 <-> single 32-bit word */
+function ip2word(s) {
+	var p = String(s).split('.');
+	if (p.length !== 4) return null;
+	var v = 0;
+	for (var i = 0; i < 4; i++) { var b = parseInt(p[i], 10); if (isNaN(b) || b < 0 || b > 255) return null; v = (v * 256) + b; }
+	return v >>> 0;
+}
+function word2ip(v) { return (v>>>24 & 0xff)+'.'+(v>>16 & 0xff)+'.'+(v>>8 & 0xff)+'.'+(v & 0xff); }
+
+/* ASCII string <-> big-endian 32-bit words, 0xFF padded (the /ms string format) */
+function str2words(s, nwords) {
+	var w = [];
+	for (var i = 0; i < nwords; i++) {
+		var x = 0;
+		for (var j = 0; j < 4; j++) {
+			var k = i * 4 + j;
+			var c = (k < s.length) ? (s.charCodeAt(k) & 0xff) : 0xff;
+			x = (x * 256) + c;
+		}
+		w.push('0x' + ('00000000' + (x >>> 0).toString(16)).slice(-8));
+	}
+	return w;
+}
+function words2str(arr) {
+	var s = '';
+	(arr || []).forEach(function(hx) {
+		var v = parseInt(hx, 16) >>> 0;
+		for (var sh = 24; sh >= 0; sh -= 8) {
+			var c = (v >> sh) & 0xff;
+			if (c === 0xff || c === 0) continue;
+			s += String.fromCharCode(c);
+		}
+	});
+	return s;
+}
 function hex2mac(hi, lo) {
 	function b(v, s) { return ('0' + ((v >> s) & 0xff).toString(16)).slice(-2); }
 	return [ b(hi,24), b(hi,16), b(hi,8), b(hi,0), b(lo,24), b(lo,16) ].join(':');
@@ -150,43 +191,88 @@ function renderNetwork(id, target) {
 	});
 }
 
-var CFG_PARAMS = [
-	{ pid: '0x1003', bank: '0', label: _('Last operating freq (MHz)'), min: 0, max: 1600 },
-	{ pid: '0x1009', bank: '0', label: _('Band mask (hex)'), hex: true },
-	{ pid: '0x100e', bank: '0', label: _('Beacon power'), min: 0, max: 60 },
-	{ pid: '0x10a8', bank: '0', label: _('TX power'), min: 0, max: 60 },
-	{ pid: '0x1002', bank: '0', label: _('Preferred NC (0/1)'), min: 0, max: 1 },
-	{ pid: '0x1001', bank: '0', label: _('Network search (0/1)'), min: 0, max: 1 }
+function readCfgRaw(id, bank, pid) {
+	return ms(id, bank + '/' + pid + '/GET').then(function(r) { return r.data || []; });
+}
+
+var CFG_GROUPS = [
+	{ title: _('MoCA / PHY'), params: [
+		{ pid: '0x1003', bank: '0', label: _('Last operating freq (MHz)'), type: 'int', min: 0, max: 1600 },
+		{ pid: '0x1009', bank: '0', label: _('Band mask (hex)'), type: 'hex' },
+		{ pid: '0x100e', bank: '0', label: _('Beacon power'), type: 'int', min: 0, max: 60 },
+		{ pid: '0x10a8', bank: '0', label: _('TX power'), type: 'int', min: 0, max: 60 },
+		{ pid: '0x1002', bank: '0', label: _('Preferred NC (0/1)'), type: 'int', min: 0, max: 1 },
+		{ pid: '0x1001', bank: '0', label: _('Network search (0/1)'), type: 'int', min: 0, max: 1 }
+	] },
+	{ title: _('Privacy'), params: [
+		{ pid: '0x1059', bank: '0', label: _('Security mode (hex)'), type: 'hex' },
+		{ pid: '0x1049', bank: '0', label: _('MoCA password'), type: 'ascii', words: 5 },
+		{ pid: '0x130D', bank: '0', label: _('Enhanced privacy mode (0-7)'), type: 'int', min: 0, max: 7 },
+		{ pid: '0x1400', bank: '0', label: _('Enhanced privacy password'), type: 'ascii', words: 16 }
+	] },
+	{ title: _('Device / network'), params: [
+		{ pid: '0x212', bank: '1', label: _('Adapter name (index)'), type: 'int', min: 0, max: 255 },
+		{ pid: '0x20b', bank: '1', label: _('IP address'), type: 'ip' },
+		{ pid: '0x210', bank: '1', label: _('Netmask'), type: 'ip' },
+		{ pid: '0x211', bank: '1', label: _('Gateway'), type: 'ip' },
+		{ pid: '0x217', bank: '1', label: _('DHCP (0/1)'), type: 'int', min: 0, max: 1 }
+	] }
 ];
 
 function renderConfig(id, target) {
 	target.innerHTML = '';
-	var tbl = E('table', { 'class': 'table' });
-	target.appendChild(tbl);
-	CFG_PARAMS.forEach(function(p) {
-		var input = E('input', { 'type': 'text', 'class': 'cbi-input-text', 'style': 'width:8em' });
-		var btn = E('button', { 'class': 'cbi-button cbi-button-save' }, _('Set'));
-		var st = E('span', { 'style': 'margin-left:.5em' });
-		readCfg(id, p.bank, p.pid).then(function(v) {
-			if (v != null) input.value = p.hex ? ('0x' + (v >>> 0).toString(16)) : String(v);
-		});
-		btn.addEventListener('click', function() {
-			var raw = (input.value || '').trim();
-			var val = p.hex ? raw : parseInt(raw, 10);
-			if (!p.hex && (isNaN(val) || (p.min != null && val < p.min) || (p.max != null && val > p.max))) {
-				st.textContent = _('invalid'); st.style.color = '#c00'; return;
-			}
-			st.textContent = _('saving…'); st.style.color = '';
-			writeCfg(id, p.bank, p.pid, p.hex ? raw : val).then(function(r) {
-				var ok = (r.code >= 200 && r.code < 300);
-				st.textContent = ok ? _('saved') : (_('error ') + r.code);
-				st.style.color = ok ? '#080' : '#c00';
+
+	CFG_GROUPS.forEach(function(grp) {
+		target.appendChild(E('h4', {}, grp.title));
+		var tbl = E('table', { 'class': 'table' });
+		target.appendChild(tbl);
+
+		grp.params.forEach(function(p) {
+			var input = E('input', { 'type': 'text', 'class': 'cbi-input-text',
+				'style': p.type === 'ascii' ? 'width:16em' : 'width:9em' });
+			var btn = E('button', { 'class': 'cbi-button cbi-button-save' }, _('Set'));
+			var st = E('span', { 'style': 'margin-left:.5em' });
+
+			readCfgRaw(id, p.bank, p.pid).then(function(d) {
+				if (!d.length) return;
+				var v = parseInt(d[0], 16) >>> 0;
+				if (p.type === 'hex') input.value = '0x' + v.toString(16);
+				else if (p.type === 'ip') input.value = word2ip(v);
+				else if (p.type === 'ascii') input.value = words2str(d);
+				else input.value = String(v);
 			});
+
+			btn.addEventListener('click', function() {
+				var raw = (input.value || '').trim(), w;
+				st.style.color = '';
+				if (p.type === 'ip') {
+					var ipw = ip2word(raw);
+					if (ipw == null) { st.textContent = _('invalid'); st.style.color = '#c00'; return; }
+					w = writeCfg(id, p.bank, p.pid, '0x' + ipw.toString(16));
+				} else if (p.type === 'ascii') {
+					w = writeCfgWords(id, p.bank, p.pid, str2words(raw, p.words || 5));
+				} else if (p.type === 'hex') {
+					w = writeCfg(id, p.bank, p.pid, raw);
+				} else {
+					var val = parseInt(raw, 10);
+					if (isNaN(val) || (p.min != null && val < p.min) || (p.max != null && val > p.max)) {
+						st.textContent = _('invalid'); st.style.color = '#c00'; return;
+					}
+					w = writeCfg(id, p.bank, p.pid, val);
+				}
+				st.textContent = _('saving…');
+				w.then(function(r) {
+					var ok = (r.code >= 200 && r.code < 300);
+					st.textContent = ok ? _('saved') : (_('error ') + r.code);
+					st.style.color = ok ? '#080' : '#c00';
+				});
+			});
+
+			tbl.appendChild(E('tr', { 'class': 'tr' }, [
+				E('td', { 'class': 'td left', 'width': '40%' }, p.label),
+				E('td', { 'class': 'td left' }, [ input, ' ', btn, st ])
+			]));
 		});
-		tbl.appendChild(E('tr', { 'class': 'tr' }, [
-			E('td', { 'class': 'td left', 'width': '40%' }, p.label),
-			E('td', { 'class': 'td left' }, [ input, ' ', btn, st ])
-		]));
 	});
 }
 

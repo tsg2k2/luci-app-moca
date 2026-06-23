@@ -242,13 +242,27 @@ method_census() {
 	if [ -n "$d" ] && [ -r "$d/moca_nodes" ]; then
 		while read -r node role moca tx rx guid; do
 			[ -n "$node" ] || continue
+			local g="${guid#guid=}" host="" ip="" ll
+			# Correlate the MoCA GUID (= the node's MAC) with a DHCP lease /
+			# neighbour entry to name the device behind each node.
+			if [ -n "$g" ] && [ "$g" != "unknown" ]; then
+				ll="$(grep -i " $g " /tmp/dhcp.leases 2>/dev/null | head -1)"
+				if [ -n "$ll" ]; then
+					ip="$(echo "$ll" | awk '{print $3}')"
+					host="$(echo "$ll" | awk '{print $4}')"
+					[ "$host" = "*" ] && host=""
+				fi
+				[ -n "$ip" ] || ip="$(ip neigh show 2>/dev/null | grep -i "$g" | awk '{print $1}' | head -1)"
+			fi
 			json_add_object ""
 			json_add_string node "${node#node}"
 			json_add_string role "${role#role=}"
 			json_add_string moca "${moca#moca=}"
 			json_add_string tx "${tx#tx=}"
 			json_add_string rx "${rx#rx=}"
-			json_add_string guid "${guid#guid=}"
+			json_add_string guid "$g"
+			json_add_string ip "$ip"
+			json_add_string host "$host"
 			json_close_object
 		done < "$d/moca_nodes"
 	fi

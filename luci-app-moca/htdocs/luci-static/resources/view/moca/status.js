@@ -21,7 +21,8 @@ var OVERVIEW = [
 	[ 'moca_fw_version',       _('Firmware') ],
 	[ 'moca_chip_type',        _('Chip') ],
 	[ 'moca_security_enabled', _('Security'),
-	  function(v) { return (v == '1') ? _('enabled') : _('disabled'); } ]
+	  function(v) { return (v == '1') ? _('enabled') : _('disabled'); } ],
+	[ 'moca_soc_health',       _('SoC health') ]
 ];
 
 function rd(name) {
@@ -32,11 +33,10 @@ function rd(name) {
 
 function readAll() {
 	var keys = OVERVIEW.map(function(r) { return r[0]; });
-	return Promise.all(keys.map(rd).concat([ rd('moca_phy_rates') ]))
+	return Promise.all(keys.map(rd))
 		.then(function(vals) {
 			var o = {};
 			keys.forEach(function(k, i) { o[k] = vals[i]; });
-			o._rates = vals[keys.length];
 			return o;
 		});
 }

@@ -2,6 +2,7 @@
 'require view';
 'require ui';
 'require rpc';
+'require poll';
 
 /*
  * Coax nodes — the whole MoCA network as seen by the router's own chip over
@@ -44,6 +45,11 @@ function decPhyNode(w) {
 	return 'valid=' + w[0] + '  vals=[' + s32(w[1]) + ', ' + s32(w[2]) + ', ' + s32(w[3]) + ', ' + s32(w[4]) + ']';
 }
 function decWord0(w) { return (w.length >= 1) ? ('= ' + w[0] + ' (0x' + w[0].toString(16) + ')') : ''; }
+function decSoc(w) {
+	if (w.length < 6) return '';
+	return (w[0] === 1 ? 'healthy' : 'UNHEALTHY') + '  fatal=0x' + w[1].toString(16) +
+		'  bbTemp=' + w[4] + 'C  rfTemp=' + w[5] + 'C';
+}
 
 var MOCA_GROUPS = {
 	phy: _('PHY / link'), stats: _('Statistics'), power: _('Power'),
@@ -78,6 +84,7 @@ var MOCA_CMDS = [
 	{ g: 'power', name: _('Sleep'), danger: 1, i: [ { k: 'd', l: _('Duration'), def: '0' } ],
 	  b: function(n, v) { return ['0x1010030', mwHex(+v.d)]; } },
 	{ g: 'power', name: _('Wake'),             b: function() { return ['0x1010031', '0x0']; } },
+	{ g: 'manage', ov: 1, name: _('SoC status'), d: decSoc, b: function() { return ['0x1010001']; } },
 	{ g: 'manage', name: _('Reset node'), danger: 1, special: 'reset', i: [ { k: 's', l: _('Delay s'), def: '0' } ] },
 	{ g: 'manage', name: _('Request NC handoff'), danger: 1, b: function(n) { return ['0x1010019', mwHex(1 << n), '0x0']; } },
 	{ g: 'manage', name: _('Request LMO'), danger: 1, b: function(n) { return ['0x101001a', mwHex(1 << n), '0x0', '0x0', '0x0', '0x0']; } },
@@ -90,7 +97,9 @@ var MOCA_CMDS = [
 	{ g: 'bridge', name: _('Switch stats'),  b: function(n) { return ['0x1010072', mwHex(n)]; } },
 	{ g: 'bridge', name: _('Switch config'), b: function(n) { return ['0x1010073', mwHex(n)]; } },
 	{ g: 'bridge', name: _('Bridge stats'),  b: function(n) { return ['0x1010011', mwHex(n)]; } },
-	{ g: 'bridge', name: _('Bridge table'),  b: function(n) { return ['0x1010012', mwHex(n), '0x0']; } }
+	{ g: 'bridge', name: _('Bridge table'),  b: function(n) { return ['0x1010012', mwHex(n), '0x0']; } },
+	{ g: 'bridge', name: _('Mcast filter mode'), d: decWord0, b: function() { return ['0x1010027']; } },
+	{ g: 'bridge', name: _('List QoS flows'), b: function() { return ['0x1010043', '0x0', '0x0', '0x0', '0x0']; } }
 ];
 
 function mocaRun(c, node, vals) {
@@ -217,10 +226,12 @@ return view.extend({
 
 		var body = E('div');
 
-		function loadCoax() {
-			body.innerHTML = '';
-			body.appendChild(E('em', {}, _('Reading coax node table…')));
-			callCensus().then(function(c) {
+		function loadCoax(quiet) {
+			if (!quiet || !body.firstChild) {
+				body.innerHTML = '';
+				body.appendChild(E('em', {}, _('Reading coax node table…')));
+			}
+			return callCensus().then(function(c) {
 				var nodes = (c && c.nodes) || [];
 				var self = parseInt(c && c.self, 10);
 				var ncId = parseInt(c && c.nc, 10);
@@ -237,27 +248,31 @@ return view.extend({
 						E('th', { 'class': 'th' }, _('MoCA')),
 						E('th', { 'class': 'th' }, _('TX/RX Mbps')),
 						E('th', { 'class': 'th' }, _('GUID')),
+						E('th', { 'class': 'th' }, _('Device')),
 						E('th', { 'class': 'th' }, _('Actions'))
 					])
 				]);
 				nodes.forEach(function(n) {
 					var id = parseInt(n.node, 10);
 					var cell = [];
+					var adapter = n.guid ? byMac[String(n.guid).toLowerCase()] : null;
 
 					var ctl = E('button', { 'class': 'cbi-button cbi-button-action',
 						'style': 'margin-right:.4em' }, _('Details'));
 					ctl.addEventListener('click', function() { mocaNodeDialog(id, n.guid); });
 					cell.push(ctl);
-
-					var adapter = n.guid ? byMac[String(n.guid).toLowerCase()] : null;
 					if (adapter)
 						cell.push(E('a', {
 							'class': 'cbi-button cbi-button-neutral',
 							'href': L.url('admin/network/moca/adapters'),
 							'title': adapter.name + ' @ ' + adapter.host
 						}, _('Manage (web)')));
-					if (id === self)
-						cell.push(E('em', { 'style': 'margin-left:.4em' }, _('(this router)')));
+
+					/* device behind the node: adapter name, else DHCP host/ip */
+					var devName = adapter ? adapter.name
+						: (n.host || (id === self ? _('this router') : ''));
+					var devCell = [ E('span', {}, devName || '–') ];
+					if (n.ip) devCell.push(E('span', { 'style': 'color:#888' }, ' (' + n.ip + ')'));
 
 					tbl.appendChild(E('tr', { 'class': 'tr' }, [
 						E('td', { 'class': 'td' }, String(id)),
@@ -265,6 +280,7 @@ return view.extend({
 						E('td', { 'class': 'td' }, n.moca),
 						E('td', { 'class': 'td' }, (n.tx || '0') + '/' + (n.rx || '0')),
 						E('td', { 'class': 'td', 'style': 'font-family:monospace' }, n.guid),
+						E('td', { 'class': 'td' }, devCell),
 						E('td', { 'class': 'td' }, cell)
 					]));
 				});
@@ -292,7 +308,56 @@ return view.extend({
 			});
 		});
 
+		/* ---- full per-node PHY-rate matrix (FMR per node) ---- */
+		function fmrRow(words) {
+			var b = [];
+			words.forEach(function(w) { b.push((w>>>24)&0xff, (w>>>16)&0xff, (w>>>8)&0xff, w&0xff); });
+			var rates = [];
+			for (var p = 0; p < 16; p++) {
+				var dp = 0x28 + p * 6;
+				if (dp + 4 > b.length) break;
+				var cp = b[dp], nbits = (b[dp+2] << 8) | b[dp+3];
+				rates[p] = nbits ? Math.floor(nbits * 1200 / ((cp + 138) * 52)) : 0;
+			}
+			return rates;
+		}
+		var matrixBody = E('div');
+		function loadMatrix() {
+			matrixBody.innerHTML = '';
+			matrixBody.appendChild(E('em', {}, _('Building rate matrix…')));
+			callCensus().then(function(c) {
+				var ns = (c && c.nodes || []).map(function(n) { return parseInt(n.node, 10); });
+				return Promise.all(ns.map(function(n) {
+					return callNodeCmd('0x101001d 0x' + (1 << n).toString(16) + ' 0x2').then(function(r) {
+						var p = mocaParse(r);
+						return { node: n, rates: p.words ? fmrRow(p.words) : [] };
+					});
+				})).then(function(rows) {
+					var hdr = [ E('th', { 'class': 'th' }, _('TX\\RX')) ];
+					ns.forEach(function(n) { hdr.push(E('th', { 'class': 'th' }, _('node %d').format(n))); });
+					var tbl = E('table', { 'class': 'table' }, [ E('tr', { 'class': 'tr table-titles' }, hdr) ]);
+					rows.forEach(function(row) {
+						var cells = [ E('td', { 'class': 'td', 'style': 'font-weight:bold' }, _('node %d').format(row.node)) ];
+						ns.forEach(function(to) {
+							cells.push(E('td', { 'class': 'td' },
+								(row.node === to) ? '—' : String(row.rates[to] || 0)));
+						});
+						tbl.appendChild(E('tr', { 'class': 'tr' }, cells));
+					});
+					matrixBody.innerHTML = '';
+					matrixBody.appendChild(tbl);
+				});
+			}).catch(function(e) {
+				matrixBody.innerHTML = '';
+				matrixBody.appendChild(E('p', { 'class': 'alert-message warning' },
+					_('Matrix failed: ') + (e.message || e)));
+			});
+		}
+		var matrixBtn = E('button', { 'class': 'cbi-button cbi-button-action' }, _('Show rate matrix'));
+		matrixBtn.addEventListener('click', loadMatrix);
+
 		loadCoax();
+		poll.add(function() { return loadCoax(true); }, 8);
 
 		return E('div', { 'class': 'cbi-map' }, [
 			E('h2', {}, _('Coax nodes (MoCA L2ME)')),
@@ -302,6 +367,10 @@ return view.extend({
 					  'GUID, no IP needed. Use Details for the per-node command console; a ' +
 					  'node matching a configured adapter also links to its web management.')),
 				refreshBtn, body,
+				E('h3', {}, _('Per-node PHY-rate matrix (Mbps)')),
+				E('p', { 'class': 'cbi-value-description' },
+					_('Row = transmitting node, column = receiving node.')),
+				matrixBtn, matrixBody,
 				E('h3', {}, _('L2ME command (advanced)')),
 				E('p', { 'class': 'cbi-value-description' },
 					_('Raw SoC/DCAP command "<cmdid> [hex words]" — e.g. 0x1010022 0x1 = ' +
