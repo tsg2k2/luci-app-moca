@@ -17,9 +17,25 @@
 			"path": "moca/status"
 		}
 	},
+	"admin/network/moca/nodes": {
+		"title": "Coax nodes",
+		"order": 2,
+		"action": {
+			"type": "view",
+			"path": "moca/nodes"
+		}
+	},
+	"admin/network/moca/adapters": {
+		"title": "Adapters",
+		"order": 3,
+		"action": {
+			"type": "view",
+			"path": "moca/adapters"
+		}
+	},
 	"admin/network/moca/config": {
 		"title": "Configuration",
-		"order": 2,
+		"order": 4,
 		"action": {
 			"type": "view",
 			"path": "moca/config"

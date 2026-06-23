@@ -1,0 +1,436 @@
+#!/bin/sh
+# rpcd object "moca": a thin, authenticated HTTP proxy to the
+# MaxLinear /ms parameter API on remote MoCA adapters (Frontier FC252,
+# Verizon, GoCoax ...).  The browser never talks to the adapters directly and
+# never sees their passwords; the router forwards using credentials from
+# /etc/config/moca_other.  The target host is resolved from UCI by adapter id,
+# so the proxy can only ever reach configured adapters.
+#
+# Methods:
+#   list                        -> { "adapters": [ {id,name,host,vendor,username,enabled} ] }
+#   request {id,path,body?}     -> { "code":<http>, "data":<parsed array|null>, "raw":<text> }
+#   discover                    -> { "found": [ {ip,mac,chip,name,sw,via} ] }
+#   adopt {mac,ip,name?,vendor?,username?,password?,reserve?}
+#                               -> { "id":<section>, "reserved":<0|1> }
+#
+# 'path' is the /ms suffix, e.g. "0/0x1003/GET" or "1/0xb00".
+# 'body' defaults to {"data":[]}.
+
+. /usr/share/libubox/jshn.sh
+
+CFG=moca_other
+
+# MaxLinear / Entropic MoCA OUI hints (discovery is confirmed by an /ms probe,
+# not by OUI; these only rank candidates first).
+MOCA_OUIS="04:b6:be 00:23:e9 e8:9f:80 5c:35:3b 28:6d:cd b0:e7:de"
+
+cfg_timeout() {
+	local t
+	config_load "$CFG"
+	config_get t globals timeout 6
+	[ "$t" -ge 1 ] 2>/dev/null && echo "$t" || echo 6
+}
+
+# base64-encode stdin arg (no base64/openssl binary in the image, so use awk).
+b64enc() {
+	awk -v s="$1" 'BEGIN{
+		b="ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+		for(i=0;i<256;i++)O[sprintf("%c",i)]=i;
+		n=length(s);o="";
+		for(i=1;i<=n;i+=3){
+			c1=O[substr(s,i,1)];
+			c2=(i+1<=n)?O[substr(s,i+1,1)]:0;
+			c3=(i+2<=n)?O[substr(s,i+2,1)]:0;
+			o=o substr(b,int(c1/4)+1,1) substr(b,(c1%4)*16+int(c2/16)+1,1) \
+			    ((i+1<=n)?substr(b,(c2%16)*4+int(c3/64)+1,1):"=") \
+			    ((i+2<=n)?substr(b,c3%64+1,1):"=")
+		}
+		print o
+	}'
+}
+
+# Pre-emptive HTTP Basic header.  The router's (mbedTLS) curl does not send
+# Basic credentials until challenged, and these adapters answer the first
+# request with a 401 instead of a proper challenge -- so send it up front.
+basic_hdr() {
+	printf 'Authorization: Basic %s' "$(b64enc "$1")"
+}
+
+# Build the credential list to try while probing: every distinct user:pass
+# already configured in the inventory, then the per-vendor factory defaults.
+discover_creds() {
+	. /lib/functions.sh
+	config_load "$CFG"
+	add_cred() {
+		local s="$1" u p
+		config_get u "$s" username "admin"
+		config_get p "$s" password ""
+		[ -n "$p" ] && echo "$u:$p"
+	}
+	config_foreach add_cred adapter
+	# Factory defaults: frontier, verizon, gocoax (new+old), generic.
+	printf '%s\n' admin:cambridge admin:admin admin:gocoaxx admin:goCoax@2018 admin:password
+}
+
+# Probe one IP for the MaxLinear /ms API.  Emits a JSON object into the open
+# array on success (MoCA adapter), nothing otherwise.  $1=ip $2=mac $3=via
+probe_ms() {
+	local ip="$1" mac="$2" via="$3" tmo cred hdr chip name sw r
+	tmo="$(cfg_timeout)"
+	for cred in $CREDS; do
+		hdr="$(basic_hdr "$cred")"
+		r="$(curl -s -m "$tmo" -H "$hdr" -X POST "http://$ip/ms/1/0x303/GET" 2>/dev/null)"
+		case "$r" in
+			*'"data"'*)
+				chip="$(echo "$r" | grep -oE '0x[0-9a-fA-F]+' | head -1)"
+				sw="$(curl -s -m "$tmo" -H "$hdr" -X POST "http://$ip/ms/1/0x103/GET" 2>/dev/null | grep -oE '0x[0-9a-fA-F]+' | tr '\n' ' ')"
+				name="$(curl -s -m "$tmo" -H "$hdr" -X POST "http://$ip/ms/1/0x212/GET" 2>/dev/null | grep -oE '0x[0-9a-fA-F]+' | head -1)"
+				json_add_object ""
+				json_add_string ip "$ip"
+				json_add_string mac "$mac"
+				json_add_string chip "$chip"
+				json_add_string name "$name"
+				json_add_string sw "$sw"
+				json_add_string cred "${cred%%:*}"
+				json_add_string via "$via"
+				json_close_object
+				return 0 ;;
+		esac
+	done
+	return 1
+}
+
+# Discover MoCA adapters on the network.
+#   1. DHCP leases + neighbour table  (the plug-and-play happy path: an adapter
+#      on DHCP shows up as a lease; we confirm it with an /ms probe).
+#   2. Shared factory static IP(s)    (factory-fresh adapters all share one mgmt
+#      IP -> ARP-collision: alias that subnet on the bridge, enumerate every MAC
+#      answering the IP, then pin the IP to each MAC in turn and probe it).
+method_discover() {
+	. /lib/functions.sh
+	CREDS="$(discover_creds | awk '!seen[$0]++')"
+
+	local brdev alias static_ips seen_mac=" "
+	config_load "$CFG"
+	config_get brdev    globals bridge "br-lan"
+	config_get alias    globals static_alias ""        # e.g. 192.168.144.2/24
+	config_get static_ips globals static_ips "192.168.144.200"
+
+	json_init
+	json_add_array found
+
+	# --- 1. DHCP leases + ARP/neighbour table -----------------------------
+	{
+		[ -f /tmp/dhcp.leases ] && awk '{print $2, $3}' /tmp/dhcp.leases
+		ip neigh show 2>/dev/null | awk '/lladdr/{print $5, $1}'
+	} | while read -r mac ip; do
+		[ -n "$ip" ] && [ -n "$mac" ] || continue
+		case "$seen_mac" in *" $mac "*) continue ;; esac
+		seen_mac="$seen_mac$mac "
+		probe_ms "$ip" "$mac" "dhcp"
+	done
+
+	# --- 2. Shared factory static IP(s) -----------------------------------
+	# These sit on an off-LAN subnet, so add a temporary alias on the bridge
+	# (globals.static_alias) to get an L2 path, ping each static IP to learn its
+	# MAC, then probe it.  (One device per IP; for several units colliding on the
+	# SAME static IP, install 'arping' and enumerate -- noted in the docs.)
+	if [ -n "$alias" ]; then
+		ip addr add "$alias" dev "$brdev" 2>/dev/null
+		local sip mac
+		for sip in $static_ips; do
+			ping -c 1 -W 1 "$sip" >/dev/null 2>&1
+			mac="$(ip neigh show "$sip" dev "$brdev" 2>/dev/null | grep -oE '([0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}' | head -1)"
+			[ -n "$mac" ] || continue
+			case "$seen_mac" in *" $mac "*) continue ;; esac
+			seen_mac="$seen_mac$mac "
+			probe_ms "$sip" "$mac" "static"
+		done
+		ip addr del "$alias" dev "$brdev" 2>/dev/null
+	fi
+
+	json_close_array
+
+	# Vendor-agnostic census from the router's OWN MoCA chip (phy-mxl371x
+	# moca_nodes sysfs): every node on the coax by GUID, no IP needed.  This
+	# is the authoritative "how many adapters and which GUIDs" list to map
+	# against what was reached over HTTP above.
+	json_add_array census
+	local nf
+	# Shell '*' can't span soc@0/90000.mdio, so locate the attr with find.
+	nf="$(find /sys/devices -name moca_nodes 2>/dev/null | head -1)"
+	if [ -r "$nf" ]; then
+		while read -r node role moca tx rx guid; do
+			[ -n "$node" ] || continue
+			json_add_object ""
+			json_add_string node "${node#node}"
+			json_add_string role "${role#role=}"
+			json_add_string moca "${moca#moca=}"
+			json_add_string guid "${guid#guid=}"
+			json_close_object
+		done < "$nf"
+	fi
+	json_close_array
+
+	json_dump
+}
+
+# Adopt a discovered adapter: persist it to /etc/config/moca_other and, when
+# asked, add a static DHCP reservation (keyed on its MAC) so it always gets the
+# same IP -> true plug-and-play (after the adapter is flipped to DHCP).
+method_adopt() {
+	local input mac ip name vendor username password reserve
+	read -r input
+	json_load "$input"
+	json_get_var mac mac
+	json_get_var ip ip
+	json_get_var name name
+	json_get_var vendor vendor
+	json_get_var username username
+	json_get_var password password
+	json_get_var reserve reserve
+
+	[ -n "$ip" ] || { json_init; json_add_string error "missing ip"; json_dump; return; }
+	[ -n "$name" ] || name="MoCA ${mac:-$ip}"
+	[ -n "$vendor" ] || vendor="generic"
+	[ -n "$username" ] || username="admin"
+
+	# Stable section id from the MAC (fall back to the IP).
+	local sid
+	sid="moca_$(echo "${mac:-$ip}" | tr -cd '0-9a-fA-F' | tail -c 8)"
+
+	uci -q set "$CFG.$sid=adapter"
+	uci -q set "$CFG.$sid.name=$name"
+	uci -q set "$CFG.$sid.host=$ip"
+	uci -q set "$CFG.$sid.vendor=$vendor"
+	uci -q set "$CFG.$sid.username=$username"
+	[ -n "$password" ] && uci -q set "$CFG.$sid.password=$password"
+	[ -n "$mac" ] && uci -q set "$CFG.$sid.mac=$mac"
+	uci -q set "$CFG.$sid.enabled=1"
+	uci -q commit "$CFG"
+
+	local reserved=0
+	if [ "$reserve" = 1 ] && [ -n "$mac" ]; then
+		uci -q set "dhcp.$sid=host"
+		uci -q set "dhcp.$sid.name=$sid"
+		uci -q set "dhcp.$sid.mac=$mac"
+		uci -q set "dhcp.$sid.ip=$ip"
+		uci -q commit dhcp
+		/etc/init.d/dnsmasq reload >/dev/null 2>&1
+		reserved=1
+	fi
+
+	json_init
+	json_add_string id "$sid"
+	json_add_int reserved "$reserved"
+	json_dump
+}
+
+# Locate the router's own MoCA PHY sysfs dir (phy-mxl371x moca_* attrs).
+local_moca_dir() {
+	local nf
+	nf="$(find /sys/devices -name moca_nodes 2>/dev/null | head -1)"
+	[ -n "$nf" ] && dirname "$nf"
+}
+
+# L2ME node census from the local chip: every coax node by GUID + role + rates,
+# plus the active mask / NC / our own node id.  Vendor-agnostic, no IP.
+method_census() {
+	local d="$(local_moca_dir)"
+	json_init
+	json_add_array nodes
+	if [ -n "$d" ] && [ -r "$d/moca_nodes" ]; then
+		while read -r node role moca tx rx guid; do
+			[ -n "$node" ] || continue
+			json_add_object ""
+			json_add_string node "${node#node}"
+			json_add_string role "${role#role=}"
+			json_add_string moca "${moca#moca=}"
+			json_add_string tx "${tx#tx=}"
+			json_add_string rx "${rx#rx=}"
+			json_add_string guid "${guid#guid=}"
+			json_close_object
+		done < "$d/moca_nodes"
+	fi
+	json_close_array
+	json_add_string active "$(cat "$d/moca_active_nodes" 2>/dev/null)"
+	json_add_string nc "$(cat "$d/moca_nc_node_id" 2>/dev/null)"
+	json_add_string self "$(cat "$d/moca_node_id" 2>/dev/null)"
+	json_dump
+}
+
+# Reset remote node(s) over L2ME: input {nodemask, seconds?}.
+method_node_reset() {
+	local input nodemask seconds d
+	read -r input; json_load "$input"
+	json_get_var nodemask nodemask
+	json_get_var seconds seconds
+	d="$(local_moca_dir)"
+	[ -n "$d" ] && [ -n "$nodemask" ] || {
+		json_init; json_add_string error "no moca dev / nodemask"; json_dump; return; }
+	if echo "$nodemask $seconds" > "$d/moca_node_reset" 2>/dev/null; then
+		json_init; json_add_boolean ok 1; json_dump
+	else
+		json_init; json_add_string error "reset rejected by driver"; json_dump
+	fi
+}
+
+# Generic L2ME/MoCA passthrough: input {cmd:"<cmdid> [words...]"} (all hex).
+# Returns the driver's response line ("<bytes> <w0> <w1> ...").
+method_node_cmd() {
+	local input cmd d
+	read -r input; json_load "$input"
+	json_get_var cmd cmd
+	d="$(local_moca_dir)"
+	[ -n "$d" ] && [ -n "$cmd" ] || {
+		json_init; json_add_string error "no moca dev / cmd"; json_dump; return; }
+	# only hex words and spaces, never anything else
+	case "$cmd" in *[!0-9a-fA-FxX\ ]*)
+		json_init; json_add_string error "bad cmd"; json_dump; return ;;
+	esac
+	if echo "$cmd" > "$d/moca_cmd" 2>/dev/null; then
+		json_init; json_add_string resp "$(cat "$d/moca_cmd" 2>/dev/null)"; json_dump
+	else
+		json_init; json_add_string error "cmd rejected by driver"; json_dump
+	fi
+}
+
+# Emit the adapter inventory (without passwords).
+method_list() {
+	json_init
+	json_add_array adapters
+
+	. /lib/functions.sh
+	config_load "$CFG"
+
+	add_adapter() {
+		local s="$1" name host vendor username enabled mac
+		config_get name     "$s" name "$s"
+		config_get host     "$s" host ""
+		config_get vendor   "$s" vendor "generic"
+		config_get username "$s" username "admin"
+		config_get enabled  "$s" enabled 1
+		config_get mac      "$s" mac ""
+		[ -n "$host" ] || return 0
+
+		json_add_object ""
+		json_add_string id "$s"
+		json_add_string name "$name"
+		json_add_string host "$host"
+		json_add_string vendor "$vendor"
+		json_add_string username "$username"
+		json_add_string mac "$mac"
+		json_add_boolean enabled "$enabled"
+		json_close_object
+	}
+
+	config_foreach add_adapter adapter
+	json_close_array
+	json_dump
+}
+
+# Proxy one /ms call to a configured adapter.
+method_request() {
+	local input id path body
+	read -r input
+	json_load "$input"
+	json_get_var id id
+	json_get_var path path
+	json_get_var body body
+
+	[ -n "$id" ] && [ -n "$path" ] || {
+		json_init; json_add_string error "missing id/path"; json_dump; return
+	}
+
+	# Resolve target + creds strictly from UCI (never from the caller).
+	. /lib/functions.sh
+	config_load "$CFG"
+	local host username password enabled tmo
+	config_get host     "$id" host ""
+	config_get username "$id" username "admin"
+	config_get password "$id" password ""
+	config_get enabled  "$id" enabled 1
+	[ -n "$host" ] || {
+		json_init; json_add_string error "unknown adapter"; json_dump; return
+	}
+	[ "$enabled" = 1 ] || {
+		json_init; json_add_string error "adapter disabled"; json_dump; return
+	}
+
+	# Sanitize the path: only bank/param/verb tokens, no scheme/host/traversal.
+	case "$path" in
+		*..*|*/.*|*"//"*|http*|*" "*)
+			json_init; json_add_string error "bad path"; json_dump; return ;;
+	esac
+	path="${path#/}"; path="${path#ms/}"
+
+	[ -n "$body" ] || body='{"data":[]}'
+	tmo="$(cfg_timeout)"
+
+	# Split the body from the HTTP code with a literal token (ash has no $'\n').
+	local out code raw
+	out="$(curl -s -m "$tmo" -w '___CODE___%{http_code}' \
+		-H "$(basic_hdr "$username:$password")" \
+		-H 'Content-Type: application/x-www-form-urlencoded' \
+		-H 'Accept: text/html, */*' \
+		--data "$body" \
+		-X POST "http://$host/ms/$path" 2>/dev/null)"
+
+	code="${out##*___CODE___}"
+	raw="${out%%___CODE___*}"
+	[ -n "$code" ] || code=0
+	case "$code" in *[!0-9]*) code=0 ;; esac
+
+	# Return the HTTP code and the adapter's raw {"data":[...]} body; the LuCI
+	# view parses the JSON (all param semantics live client-side).
+	json_init
+	json_add_int code "$code"
+	json_add_string raw "$raw"
+	json_dump
+}
+
+case "$1" in
+	list)
+		json_init
+		json_add_object list
+		json_close_object
+		json_add_object request
+		json_add_string id ""
+		json_add_string path ""
+		json_add_string body ""
+		json_close_object
+		json_add_object discover
+		json_close_object
+		json_add_object census
+		json_close_object
+		json_add_object node_reset
+		json_add_string nodemask ""
+		json_add_string seconds ""
+		json_close_object
+		json_add_object node_cmd
+		json_add_string cmd ""
+		json_close_object
+		json_add_object adopt
+		json_add_string mac ""
+		json_add_string ip ""
+		json_add_string name ""
+		json_add_string vendor ""
+		json_add_string username ""
+		json_add_string password ""
+		json_add_string reserve ""
+		json_close_object
+		json_dump
+	;;
+	call)
+		case "$2" in
+			list)       method_list ;;
+			request)    method_request ;;
+			discover)   method_discover ;;
+			census)     method_census ;;
+			node_reset) method_node_reset ;;
+			node_cmd)   method_node_cmd ;;
+			adopt)      method_adopt ;;
+			*) json_init; json_add_string error "unknown method"; json_dump ;;
+		esac
+	;;
+esac

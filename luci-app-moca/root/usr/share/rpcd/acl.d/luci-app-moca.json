@@ -1,14 +1,20 @@
 {
 	"luci-app-moca": {
-		"description": "MoCA PHY status and configuration",
+		"description": "MoCA PHY status, coax nodes and adapter management",
 		"read": {
 			"file": {
 				"/sys/devices/platform/*/mdio_bus/*/*:0f/moca_*": [ "read" ]
 			},
-			"uci": [ "moca" ]
+			"ubus": {
+				"moca": [ "list", "request", "discover", "census" ]
+			},
+			"uci": [ "moca", "moca_other" ]
 		},
 		"write": {
-			"uci": [ "moca" ]
+			"ubus": {
+				"moca": [ "request", "discover", "adopt", "node_reset", "node_cmd" ]
+			},
+			"uci": [ "moca", "moca_other", "dhcp" ]
 		}
 	}
 }

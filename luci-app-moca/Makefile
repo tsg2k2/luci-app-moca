@@ -1,10 +1,12 @@
 # SPDX-License-Identifier: GPL-2.0
-# LuCI status app for the CR1000A MXL3711 MoCA 2.5 interface.
+# LuCI app for the CR1000A MXL3711 MoCA 2.5 interface: local PHY status and
+# configuration, the whole-coax node table (L2ME), and management of other MoCA
+# adapters on the network over their HTTP /ms API.
 
 include $(TOPDIR)/rules.mk
 
-LUCI_TITLE:=LuCI app for MoCA 2.5 (MXL3711) status
-LUCI_DEPENDS:=+luci-base
+LUCI_TITLE:=LuCI app for MoCA 2.5 (MXL3711): status, coax nodes, adapters
+LUCI_DEPENDS:=+luci-base +curl
 LUCI_PKGARCH:=all
 
 PKG_LICENSE:=GPL-2.0

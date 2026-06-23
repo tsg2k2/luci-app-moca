@@ -1,0 +1,30 @@
+# Inventory of OTHER MoCA adapters on the coax network that the router manages
+# over each adapter's HTTP /ms parameter API.  See docs/MOCA-OTHER-API.md.
+#
+# Each 'adapter' section: a reachable management IP, vendor profile, and the
+# adapter's web-admin credentials.  The router proxies all requests; passwords
+# never leave the device.
+#
+# Vendor profiles (defaults the UI pre-fills): frontier, verizon, gocoax, generic
+#
+#config adapter 'livingroom'
+#	option name 'Living Room (FC252)'
+#	option host '192.168.1.238'
+#	option vendor 'frontier'
+#	option username 'admin'
+#	option password 'cambridge'
+#	option enabled '1'
+
+config globals 'globals'
+	option timeout '6'
+	# Bridge that reaches the coax/MoCA segment (adapters live behind it).
+	option bridge 'br-lan'
+	# Factory-fresh adapters ship on a per-model static mgmt IP off the LAN
+	# subnet.  Discovery enumerates every MAC answering these IP(s) via ARP and
+	# probes each.  Observed defaults: Frontier FCA251 192.168.188.251 /
+	# FC252 192.168.188.252; GoCoax 192.168.144.200; Verizon ASK-MAE340
+	# 192.168.1.1.
+	option static_ips '192.168.188.251 192.168.188.252 192.168.144.200'
+	# To reach those off-subnet shared IPs, discovery temporarily adds this
+	# alias to the bridge (leave empty to skip the static scan, rely on DHCP).
+	option static_alias '192.168.188.2/24'

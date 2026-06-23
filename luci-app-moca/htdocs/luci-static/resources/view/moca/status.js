@@ -50,11 +50,9 @@ return view.extend({
 		var container = E('div', { 'class': 'cbi-map' }, [
 			E('h2', {}, _('MoCA 2.5 Status')),
 			E('div', { 'class': 'cbi-section' }, [
-				E('div', { 'id': 'moca-overview' })
-			]),
-			E('h3', {}, _('Per-node PHY rates')),
-			E('div', { 'class': 'cbi-section' }, [
-				E('div', { 'id': 'moca-rates' })
+				E('div', { 'id': 'moca-overview' }),
+				E('p', { 'class': 'cbi-value-description' },
+					_('The per-node peer table and controls moved to the Coax nodes tab.'))
 			])
 		]);
 
@@ -71,30 +69,6 @@ return view.extend({
 			var ov = container.querySelector('#moca-overview');
 			ov.innerHTML = '';
 			ov.appendChild(E('table', { 'class': 'table' }, rows));
-
-			var rt = E('table', { 'class': 'table' }, [
-				E('tr', { 'class': 'tr table-titles' }, [
-					E('th', { 'class': 'th' }, _('Node')),
-					E('th', { 'class': 'th' }, _('TX (Mbps)')),
-					E('th', { 'class': 'th' }, _('RX (Mbps)'))
-				])
-			]);
-			(d._rates || '').split('\n').forEach(function(line) {
-				var m = line.match(/^node(\d+)\s+tx=(\d+)\s+rx=(\d+)/);
-				if (m)
-					rt.appendChild(E('tr', { 'class': 'tr' }, [
-						E('td', { 'class': 'td' }, m[1]),
-						E('td', { 'class': 'td' }, m[2]),
-						E('td', { 'class': 'td' }, m[3])
-					]));
-			});
-			if (rt.childNodes.length == 1)
-				rt.appendChild(E('tr', { 'class': 'tr placeholder' }, [
-					E('td', { 'class': 'td', 'colspan': '3' }, _('No peers'))
-				]));
-			var rdiv = container.querySelector('#moca-rates');
-			rdiv.innerHTML = '';
-			rdiv.appendChild(rt);
 		}
 
 		update(data);
