@@ -50,6 +50,36 @@ function decSoc(w) {
 	return (w[0] === 1 ? 'healthy' : 'UNHEALTHY') + '  fatal=0x' + w[1].toString(16) +
 		'  bbTemp=' + w[4] + 'C  rfTemp=' + w[5] + 'C';
 }
+/* 64-bit counter: word[i] = high half, word[i+1] = low half (per the OEM decode) */
+function u64(w, i) { return (i + 1 < w.length) ? (w[i] * 4294967296 + w[i + 1]) : 0; }
+
+function decDataStats(w) {
+	if (w.length < 148) return '';
+	return 'TX pkt=' + u64(w, 0) + ' byte=' + u64(w, 2) + ' drop=' + u64(w, 4) +
+		' | RX pkt=' + u64(w, 142) + ' byte=' + u64(w, 144) + ' drop=' + u64(w, 146);
+}
+function decL2me(w) {
+	if (w.length < 4) return '';
+	return 'issued=' + w[0] + ' ok=' + w[1] + ' timedout=' + w[2] + ' failed=' + w[3];
+}
+function decSec(w) {
+	if (w.length < 9) return '';
+	return 'clear=' + w[0] + ' MMK=' + w[2] + ' PMK=' + w[3] + ' TEK=' + w[4] +
+		'  (auth: MMK=' + w[6] + ' PMK=' + w[7] + ' TEK=' + w[8] + ')';
+}
+function decFrag(w) { return 'rx=' + (w[0] || 0) + '  tx=' + (w[1] || 0); }
+function decEcb(w) {
+	if (w.length < 18) return '';
+	return 'MoCA TXdrop=' + w[8] + ' RXunclass=' + w[9] +
+		' SGMII0(rxbad=' + w[10] + ' txdma=' + w[11] + ')' +
+		' RxAPDUcrc=' + (w[15] || 0) + ' RxPDUcrc=' + (w[16] || 0) + ' TxDrop=' + (w[17] || 0);
+}
+function decRetx(w) {
+	var out = [];
+	for (var n = 0; n < 16 && (n * 2 + 1) < w.length; n++)
+		if (w[n*2] || w[n*2+1]) out.push('n' + n + '(retx=' + w[n*2] + ' to=' + w[n*2+1] + ')');
+	return out.length ? out.join(' ') : 'none';
+}
 
 var MOCA_GROUPS = {
 	phy: _('PHY / link'), stats: _('Statistics'), power: _('Power'),
@@ -65,14 +95,14 @@ var MOCA_CMDS = [
 	{ g: 'phy', name: _('Tx profile'),       b: function(n) { return ['0x1010020', mwHex(n), '0x0', '0x0']; } },
 	{ g: 'phy', name: _('Rx profile'),       b: function(n) { return ['0x1010021', mwHex(n), '0x0', '0x0']; } },
 	{ g: 'phy', name: _('Spectrum'),         b: function(n) { return ['0x101001c', mwHex(n)]; } },
-	{ g: 'stats', ov: 1, name: _('Data stats'), b: function(n) { return ['0x101000b', mwHex(n)]; } },
-	{ g: 'stats', ov: 1, name: _('L2ME stats'), b: function(n) { return ['0x1010056', mwHex(n)]; } },
+	{ g: 'stats', ov: 1, name: _('Data stats'), d: decDataStats, b: function(n) { return ['0x101000b', mwHex(n)]; } },
+	{ g: 'stats', ov: 1, name: _('L2ME stats'), d: decL2me, b: function(n) { return ['0x1010056', mwHex(n)]; } },
 	{ g: 'stats', name: _('MAC data stats'),    b: function(n) { return ['0x101007e', mwHex(n)]; } },
 	{ g: 'stats', name: _('Aggregate stats'),   b: function(n) { return ['0x1010010', mwHex(n)]; } },
 	{ g: 'stats', name: _('Frame stats'),       b: function(n) { return ['0x1010014', mwHex(n)]; } },
-	{ g: 'stats', name: _('Retransmit stats'),  b: function(n) { return ['0x1010026', mwHex(n)]; } },
-	{ g: 'stats', name: _('Fragmentation stats'), b: function(n) { return ['0x1010054', mwHex(n)]; } },
-	{ g: 'stats', name: _('ECB stats'),         b: function(n) { return ['0x1010093', mwHex(n)]; } },
+	{ g: 'stats', name: _('Retransmit stats'),  d: decRetx, b: function(n) { return ['0x1010026', mwHex(n)]; } },
+	{ g: 'stats', name: _('Fragmentation stats'), d: decFrag, b: function(n) { return ['0x1010054', mwHex(n)]; } },
+	{ g: 'stats', name: _('ECB stats'),         d: decEcb, b: function(n) { return ['0x1010093', mwHex(n)]; } },
 	{ g: 'stats', name: _('ePHY stats'),        b: function(n) { return ['0x1010013', mwHex(n)]; } },
 	{ g: 'power', ov: 1, name: _('Beacon power'), d: decBeacon, b: function() { return ['0x1010009']; } },
 	{ g: 'power', name: _('Set beacon power'), danger: 1,
@@ -90,7 +120,7 @@ var MOCA_CMDS = [
 	{ g: 'manage', name: _('Request LMO'), danger: 1, b: function(n) { return ['0x101001a', mwHex(1 << n), '0x0', '0x0', '0x0', '0x0']; } },
 	{ g: 'manage', name: _('Request NMS'), danger: 1, b: function(n) { return ['0x101001b', mwHex(n)]; } },
 	{ g: 'security', ov: 1, name: _('Security info'), b: function() { return ['0x1010051']; } },
-	{ g: 'security', name: _('Security stats'),    b: function(n) { return ['0x1010052', mwHex(n)]; } },
+	{ g: 'security', name: _('Security stats'), d: decSec, b: function(n) { return ['0x1010052', mwHex(n)]; } },
 	{ g: 'security', name: _('Enhanced security'), b: function() { return ['0x101005f']; } },
 	{ g: 'security', name: _('Endpoint detect'),   b: function() { return ['0x1010059']; } },
 	{ g: 'bridge', name: _('Switch table'),  b: function(n) { return ['0x1010071', mwHex(n), '0x0']; } },
