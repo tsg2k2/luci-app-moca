@@ -390,17 +390,22 @@ return view.extend({
 				var tbl = E('table', { 'class': 'table' }, [
 					E('tr', { 'class': 'tr table-titles' }, [
 						E('th', { 'class': 'th' }, _('IP')), E('th', { 'class': 'th' }, _('MAC')),
-						E('th', { 'class': 'th' }, _('Chip')), E('th', { 'class': 'th' }, _('Via')),
-						E('th', { 'class': 'th' }, '')
+						E('th', { 'class': 'th' }, _('Chip')), E('th', { 'class': 'th' }, _('Vendor')),
+						E('th', { 'class': 'th' }, _('Via')), E('th', { 'class': 'th' }, '')
 					])
 				]);
 				found.forEach(function(a) {
+					var vendor = a.vendor || 'generic';
+					var vlabel = (VENDORS[vendor] || {}).label || vendor;
 					var adopt = E('button', { 'class': 'cbi-button cbi-button-add' }, _('Adopt'));
 					adopt.addEventListener('click', function() {
 						adopt.disabled = true;
-						callAdopt(a.mac || '', a.ip, '', 'generic', a.cred || 'admin', '', '1').then(function() {
+						/* carry the discovered vendor + username through; the password
+						 * comes from the vendor default (blank here). */
+						callAdopt(a.mac || '', a.ip, vlabel + ' (' + a.ip + ')',
+							vendor, a.cred || 'admin', '', '1').then(function() {
 							ui.addNotification(null, E('p', {},
-								_('Adopted %s — reloading.').format(a.ip)));
+								_('Adopted %s as %s — reloading.').format(a.ip, vlabel)));
 							window.setTimeout(function() { location.reload(); }, 800);
 						});
 					});
@@ -408,6 +413,7 @@ return view.extend({
 						E('td', { 'class': 'td' }, a.ip),
 						E('td', { 'class': 'td' }, a.mac || '–'),
 						E('td', { 'class': 'td' }, chipName(a.chip)),
+						E('td', { 'class': 'td' }, vlabel),
 						E('td', { 'class': 'td' }, a.via),
 						E('td', { 'class': 'td' }, adopt)
 					]));

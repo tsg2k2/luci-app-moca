@@ -84,11 +84,30 @@ discover_creds() {
 	printf '%s\n' admin:cambridge admin:admin admin:gocoaxx admin:goCoax@2018 admin:password
 }
 
+# Map a working "user:pass" back to a vendor profile (inverse of the factory
+# defaults), so a discovered adapter can be adopted with the right vendor.
+cred_vendor() {
+	case "$1" in
+		*:cambridge)            echo frontier ;;
+		*:gocoaxx|*:goCoax@2018) echo gocoax ;;
+		*:admin)                echo verizon ;;
+		*)                      echo generic ;;
+	esac
+}
+
 # Probe one IP for the MaxLinear /ms API.  Emits a JSON object into the open
 # array on success (MoCA adapter), nothing otherwise.  $1=ip $2=mac $3=via
 probe_ms() {
-	local ip="$1" mac="$2" via="$3" tmo cred hdr chip name sw r
+	local ip="$1" mac="$2" via="$3" tmo cred hdr chip name sw r code first
 	tmo="$(cfg_timeout)"
+	# Fast reachability gate: one short request.  If nothing answers HTTP here
+	# (code 000), bail immediately instead of spending a full timeout on every
+	# credential -- that's what made whole-network discovery exceed the ubus
+	# call timeout when several candidates were dead.
+	first="$(printf '%s\n' $CREDS | head -1)"
+	code="$(curl -s -m 2 -o /dev/null -w '%{http_code}' -H "$(basic_hdr "$first")" \
+		-X POST "http://$ip/ms/1/0x303/GET" 2>/dev/null)"
+	case "$code" in 000|"") return 1 ;; esac
 	for cred in $CREDS; do
 		hdr="$(basic_hdr "$cred")"
 		r="$(curl -s -m "$tmo" -H "$hdr" -X POST "http://$ip/ms/1/0x303/GET" 2>/dev/null)"
@@ -104,6 +123,7 @@ probe_ms() {
 				json_add_string name "$name"
 				json_add_string sw "$sw"
 				json_add_string cred "${cred%%:*}"
+				json_add_string vendor "$(cred_vendor "$cred")"
 				json_add_string via "$via"
 				json_close_object
 				return 0 ;;
@@ -132,15 +152,21 @@ method_discover() {
 	json_add_array found
 
 	# --- 1. DHCP leases + ARP/neighbour table -----------------------------
+	# Collect candidates to a temp file and read from it (not a pipe) so the
+	# while loop runs in THIS shell -- a "... | while" subshell would discard
+	# every probe_ms json_add.
+	local cand="/tmp/.moca_cand.$$"
 	{
 		[ -f /tmp/dhcp.leases ] && awk '{print $2, $3}' /tmp/dhcp.leases
 		ip neigh show 2>/dev/null | awk '/lladdr/{print $5, $1}'
-	} | while read -r mac ip; do
+	} > "$cand"
+	while read -r mac ip; do
 		[ -n "$ip" ] && [ -n "$mac" ] || continue
 		case "$seen_mac" in *" $mac "*) continue ;; esac
 		seen_mac="$seen_mac$mac "
 		probe_ms "$ip" "$mac" "dhcp"
-	done
+	done < "$cand"
+	rm -f "$cand"
 
 	# --- 2. Shared factory static IP(s) -----------------------------------
 	# These sit on an off-LAN subnet, so add a temporary alias on the bridge
