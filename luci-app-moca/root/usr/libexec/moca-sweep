@@ -1,0 +1,160 @@
+#!/usr/bin/ucode
+// SPDX-License-Identifier: GPL-2.0-only
+//
+// moca-sweep: find the IP of a known MAC on an unknown subnet.
+//
+// One ICMP echo per /24 goes to the MAC, addressed to 255.255.255.255 from
+// a.b.x.2.  An adapter answers only when x.2 is on its own subnet, and asks
+// for it by ARP, which names the adapter's real address.  256 frames cover a
+// /16, and only the listed MACs ever see one.
+//
+//   moca-sweep <ifname> <a.b>... -- <mac>...
+//
+// prints "<ip> <mac>" for each MAC that answers.
+
+'use strict';
+
+import { readfile } from 'fs';
+import * as socket from 'socket';
+
+const FRAME_GAP_MS = 2;
+const SETTLE_MS = 1500;
+const PASS_HOST = [ 2, 253 ];	// the second, in case .2 is taken
+
+function csum(b) {
+	let s = 0;
+
+	for (let i = 0; i + 1 < length(b); i += 2)
+		s += b[i] << 8 | b[i + 1];
+	if (length(b) % 2)
+		s += b[length(b) - 1] << 8;
+	while (s >> 16)
+		s = (s & 0xffff) + (s >> 16);
+	return ~s & 0xffff;
+}
+
+function mac_bytes(mac) {
+	return map(split(mac, ':'), (h) => hex(h));
+}
+
+function usage() {
+	warn('usage: moca-sweep <ifname> <a.b>... -- <mac>...\n');
+	exit(2);
+}
+
+let sep = index(ARGV, '--');
+
+if (length(ARGV) < 4 || sep < 2 || sep == length(ARGV) - 1)
+	usage();
+
+let ifname = ARGV[0];
+let nets = slice(ARGV, 1, sep);
+let targets = {};
+
+for (let mac in slice(ARGV, sep + 1))
+	if (match(mac, /^([0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}$/))
+		targets[lc(mac)] = false;
+
+let ifaddr = readfile(`/sys/class/net/${ifname}/address`);
+
+if (!ifaddr) {
+	warn(`${ifname}: no such interface\n`);
+	exit(1);
+}
+
+let ifmac = mac_bytes(trim(ifaddr));
+let sock = socket.create(socket.AF_PACKET, socket.SOCK_RAW, 0);
+
+if (!sock || !sock.bind({ family: socket.AF_PACKET, protocol: 3, address: trim(ifaddr), interface: ifname })) {
+	warn(`socket: ${socket.error()}\n`);
+	exit(1);
+}
+
+function send_probe(mac, src) {
+	let ip = [ 0x45, 0, 0, 84, 0, 0, 0, 0, 64, 1, 0, 0, ...src, 255, 255, 255, 255 ];
+	let icmp = [ 8, 0, 0, 0, 0, 0, 0, 1 ];
+	let c;
+
+	for (let i = 0; i < 56; i++)
+		push(icmp, 0);
+	c = csum(ip);
+	ip[10] = c >> 8;
+	ip[11] = c & 0xff;
+	c = csum(icmp);
+	icmp[2] = c >> 8;
+	icmp[3] = c & 0xff;
+
+	sock.send(chr(...mac_bytes(mac), ...ifmac, 0x08, 0x00, ...ip, ...icmp), 0, {
+		family: socket.AF_PACKET,
+		protocol: 0x0800,
+		address: mac,
+		interface: ifname
+	});
+}
+
+function note(mac, f, off) {
+	let ip = [ ord(f, off), ord(f, off + 1), ord(f, off + 2), ord(f, off + 3) ];
+
+	if (targets[mac] || !(ip[0] || ip[1] || ip[2] || ip[3]))
+		return;
+	targets[mac] = true;
+	print(`${join('.', ip)} ${mac}\n`);
+}
+
+function now_ms() {
+	let t = clock(true);
+
+	return t[0] * 1000 + t[1] / 1000000;
+}
+
+function handle(f) {
+	if (length(f) < 42)
+		return;
+
+	let mac = sprintf('%02x:%02x:%02x:%02x:%02x:%02x', ord(f, 6), ord(f, 7), ord(f, 8),
+		ord(f, 9), ord(f, 10), ord(f, 11));
+
+	if (!(mac in targets))
+		return;
+	if (ord(f, 12) == 0x08 && ord(f, 13) == 0x06)		// ARP: sender IP
+		note(mac, f, 28);
+	else if (ord(f, 12) == 0x08 && ord(f, 13) == 0 &&	// echo reply: source
+		 (ord(f, 14) & 0x0f) == 5 && ord(f, 23) == 1 && ord(f, 34) == 0)
+		note(mac, f, 26);
+}
+
+// The socket sees every frame on the interface, so a busy LAN never lets poll
+// time out: the deadline ends this, not the silence.
+function drain(wait_ms) {
+	let end = now_ms() + wait_ms + 1;
+
+	while (true) {
+		let ev = socket.poll(max(0, end - now_ms()), [ sock, socket.POLLIN ]);
+
+		if (!length(ev) || !(ev[0][1] & socket.POLLIN))
+			break;
+		handle(sock.recv(128, socket.MSG_DONTWAIT));
+		if (now_ms() >= end)
+			break;
+	}
+}
+
+function missing() {
+	return filter(keys(targets), (m) => !targets[m]);
+}
+
+for (let host in PASS_HOST) {
+	for (let net in nets) {
+		let a = map(split(net, '.'), (o) => int(o));
+
+		for (let x = 0; x < 256; x++) {
+			for (let mac in missing())
+				send_probe(mac, [ a[0], a[1], x, host ]);
+			socket.poll(FRAME_GAP_MS, sock);
+			drain(0);
+		}
+		drain(SETTLE_MS);
+		if (!length(missing()))
+			exit(0);
+	}
+}

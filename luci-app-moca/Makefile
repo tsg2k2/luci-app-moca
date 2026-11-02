@@ -6,7 +6,8 @@
 include $(TOPDIR)/rules.mk
 
 LUCI_TITLE:=LuCI app for MoCA 2.5 (MXL3711): status, coax nodes, adapters
-LUCI_DEPENDS:=+luci-base +curl +arp-scan
+LUCI_DEPENDS:=+luci-base +curl +arp-scan +ucode +ucode-mod-fs +ucode-mod-socket
+LUCI_PKGARCH:=all
 
 PKG_LICENSE:=GPL-2.0
 PKG_MAINTAINER:=Yury Ilyanok <yuryster@gmail.com>
