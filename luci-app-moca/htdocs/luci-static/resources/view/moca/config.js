@@ -81,6 +81,88 @@ return view.extend({
 			_('Bitmask of enabled frequency bands.'));
 		o.datatype = 'range(0,255)';
 
+		s = m.section(form.NamedSection, 'settings', 'moca', _('Coax tuning'),
+			_('Leave a field empty to keep the built-in value. "Manage MoCA settings" ' +
+			  'must be on. Numbers apply to every frequency band.'));
+		s.anonymous = true;
+
+		o = s.option(form.Value, 'phy_margin', _('PHY margin'),
+			_('Safety margin the receiver keeps when it chooses a bit rate. Raise it if ' +
+			  'Frames dropped on the Status page climbs under load; lower it for more ' +
+			  'speed on clean coax. The peers re-measure the link after a change.'));
+		o.datatype = 'range(0,255)';
+		o.placeholder = '16';
+
+		o = s.option(form.Value, 'phy_margin_nper', _('PHY margin, NPER'),
+			_('Same, for the normal packet error rate profile.'));
+		o.datatype = 'range(0,255)';
+		o.placeholder = '16';
+
+		o = s.option(form.Value, 'phy_margin_vlper', _('PHY margin, VLPER'),
+			_('Same, for the very low packet error rate profile.'));
+		o.datatype = 'range(0,255)';
+		o.placeholder = '17';
+
+		o = s.option(form.Value, 'rlapm_band_mask', _('Receive-level margin bands'),
+			_('Bands that add margin by receive level (RLAPM): bit 0 = D, 1 = D-low, ' +
+			  '2 = D-high, 3 = E, 4 = F-sat, 5 = F-cable, 6 = H, 7 = custom.'));
+		o.datatype = 'range(0,255)';
+		o.placeholder = '24';
+
+		o = s.option(form.DynamicList, 'rlapm_profile', _('Receive-level profiles'),
+			_('"slot MHz level:margin ...", slots 0-5, levels 0-83. Slots 0 and 1 hold ' +
+			  '500 and 850 MHz; band D has none built in.'));
+
+		o = s.option(form.Value, 'sapm_band_mask', _('Subcarrier margin bands'),
+			_('Bands that add margin by subcarrier (SAPM), same bits as above.'));
+		o.datatype = 'range(0,255)';
+		o.placeholder = '0';
+
+		o = s.option(form.DynamicList, 'sapm_profile', _('Subcarrier profiles'),
+			_('"slot MHz threshold scstart offset:margin ...", slots 0-3, offsets 0-255, ' +
+			  'margin 255 turns a carrier off.'));
+
+		o = s.option(form.ListValue, 'tpc_mode', _('Transmit power control'));
+		o.value('', _('Built-in'));
+		o.value('0', '0');
+		o.value('1', '1');
+		o.value('2', '2');
+		o.value('3', '3');
+
+		o = s.option(form.Value, 'tpc_rate_nper', _('TPC target rate, NPER'),
+			_('PHY rate that power control aims for.'));
+		o.datatype = 'range(0,65535)';
+		o.placeholder = '680';
+
+		o = s.option(form.Value, 'tpc_rate_vlper', _('TPC target rate, VLPER'));
+		o.datatype = 'range(0,65535)';
+		o.placeholder = '680';
+
+		o = s.option(form.Value, 'tpc_rate_50', _('TPC target rate, 50 MHz'));
+		o.datatype = 'range(0,65535)';
+		o.placeholder = '265';
+
+		s = m.section(form.NamedSection, 'settings', 'moca', _('Advanced'),
+			_('Rarely needed. A wrong value can slow the link or keep the node off the network.'));
+		s.anonymous = true;
+
+		[
+			[ 'lmo_mode', _('Link maintenance mode'), '1', 255 ],
+			[ 'mii_pause_pri', _('Pause priority level'), '65535', 65535 ],
+			[ 'policing_mode', _('Policing'), '0', 1 ],
+			[ 'retx_priority', _('Retransmit priority'), '0', 15 ],
+			[ 'tx_priority_per', _('TX priority PER'), '0', 15 ],
+			[ 'tlp_min', _('TLP min'), '0', 255 ],
+			[ 'tlp_max', _('TLP max'), '95', 255 ],
+			[ 'turbo_mode', _('Turbo mode'), '0', 1 ],
+			[ 'num_channels', _('Number of channels'), '5', 5 ],
+			[ 'strip_vlan_tag', _('Strip VLAN tag'), '0', 65535 ]
+		].forEach(function(r) {
+			o = s.option(form.Value, r[0], r[1]);
+			o.datatype = 'range(0,' + r[3] + ')';
+			o.placeholder = r[2];
+		});
+
 		return m.render();
 	}
 });

@@ -22,7 +22,9 @@ var OVERVIEW = [
 	[ 'moca_chip_type',        _('Chip') ],
 	[ 'moca_security_enabled', _('Security'),
 	  function(v) { return (v == '1') ? _('enabled') : _('disabled'); } ],
-	[ 'moca_soc_health',       _('SoC health') ]
+	[ 'moca_soc_health',       _('SoC health') ],
+	[ 'moca_frame_drops',      _('Frames dropped') ],
+	[ 'moca_phy_rates',        _('PHY rates per node') ]
 ];
 
 function rd(name) {
@@ -50,9 +52,7 @@ return view.extend({
 		var container = E('div', { 'class': 'cbi-map' }, [
 			E('h2', {}, _('MoCA 2.5 Status')),
 			E('div', { 'class': 'cbi-section' }, [
-				E('div', { 'id': 'moca-overview' }),
-				E('p', { 'class': 'cbi-value-description' },
-					_('The per-node peer table and controls moved to the Coax nodes tab.'))
+				E('div', { 'id': 'moca-overview' })
 			])
 		]);
 

@@ -14,6 +14,12 @@ moca_sysfs_dir() {
 	return 1
 }
 
+# Plain numeric coax tuning options; each maps to moca_cfg_<option>.
+MOCA_TUNING="phy_margin phy_margin_nper phy_margin_vlper tpc_mode tpc_rate_50
+	tpc_rate_nper tpc_rate_vlper rlapm_band_mask sapm_band_mask lmo_mode
+	mii_pause_pri policing_mode retx_priority tx_priority_per tlp_min tlp_max
+	turbo_mode num_channels strip_vlan_tag"
+
 # MOCA_CHANGED is set to 1 by moca_stage* when a staged value differs from the
 # value already programmed in the driver, so we only re-initialise the SoC (a
 # multi-second coax drop) when the config actually changed.
@@ -41,10 +47,31 @@ moca_stage_secret() {
 	MOCA_CHANGED=1
 }
 
+# moca_stage_profiles <rlapm_profile|sapm_profile>  (a list of table lines the
+# driver can't compare, so remember the last one applied since boot)
+moca_stage_profile_line() {
+	echo "$1" > "$MOCA_DIR/moca_cfg_$2" 2>/dev/null ||
+		logger -t moca "failed to stage $2 '$1' (rejected by driver)"
+	echo "$1" >> "$3"
+}
+
+moca_stage_profiles() {
+	local last="/tmp/moca.$1" new="/tmp/moca.$1.new"
+
+	: > "$new"
+	config_list_foreach settings "$1" moca_stage_profile_line "$1" "$new"
+	if cmp -s "$new" "$last" || { [ ! -s "$new" ] && [ ! -e "$last" ]; }; then
+		rm -f "$new"
+		return 0
+	fi
+	mv "$new" "$last"
+	MOCA_CHANGED=1
+}
+
 moca_apply_config() {
 	local enabled lof preferred_nc network_search security_mode network_name
 	local password enhanced_password enhanced_privacy_mode
-	local beacon_tx_power max_tx_power freq_band_mask
+	local beacon_tx_power max_tx_power freq_band_mask opt val
 
 	MOCA_DIR=$(moca_sysfs_dir) || {
 		logger -t moca "MoCA sysfs not present; skipping config apply"
@@ -77,6 +104,12 @@ moca_apply_config() {
 	moca_stage moca_cfg_beacon_tx_power "$beacon_tx_power"
 	moca_stage moca_cfg_max_tx_power   "$max_tx_power"
 	moca_stage moca_cfg_freq_band_mask "$freq_band_mask"
+	for opt in $MOCA_TUNING; do
+		config_get val settings "$opt"
+		moca_stage "moca_cfg_$opt" "$val"
+	done
+	moca_stage_profiles rlapm_profile
+	moca_stage_profiles sapm_profile
 	moca_stage_secret moca_cfg_password          "$password"
 	moca_stage_secret moca_cfg_enhanced_password "$enhanced_password"
 
