@@ -81,7 +81,8 @@ moca_finish() {
 }
 
 # What holds with or without "Manage MoCA settings": a GUID that survives a reboot
-# (the driver only has a random netdev MAC this early) and a paired coax password.
+# (the driver only has a random netdev MAC this early), which is the MAC the
+# board reserves for MoCA, base + 5, and a paired coax password.
 moca_stage_identity() {
 	local guid mps_saved val
 
@@ -92,7 +93,7 @@ moca_stage_identity() {
 		json_load_file /etc/board.json && json_select network && json_select wan &&
 			json_get_var guid macaddr
 		[ -n "$guid" ] || guid="$(cat /sys/class/net/wan/address 2>/dev/null)"
-		[ -n "$guid" ] && guid="$(macaddr_setbit_la "$guid")"
+		[ -n "$guid" ] && guid="$(macaddr_add "$guid" 5)"
 	fi
 	[ -n "$guid" ] && moca_stage moca_guid "$guid"
 
