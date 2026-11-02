@@ -6,13 +6,13 @@
 				"/sys/devices/platform/*/mdio_bus/*/*:0f/moca_*": [ "read" ]
 			},
 			"ubus": {
-				"moca": [ "list", "request", "discover", "census", "scan_status", "listen_status" ]
+				"moca": [ "list", "request", "discover", "census", "scan_status" ]
 			},
 			"uci": [ "moca", "moca_other" ]
 		},
 		"write": {
 			"ubus": {
-				"moca": [ "request", "discover", "adopt", "node_reset", "node_cmd", "scan", "listen", "readdress" ]
+				"moca": [ "request", "discover", "adopt", "node_reset", "node_cmd", "scan", "readdress" ]
 			},
 			"uci": [ "moca", "moca_other", "dhcp" ]
 		}

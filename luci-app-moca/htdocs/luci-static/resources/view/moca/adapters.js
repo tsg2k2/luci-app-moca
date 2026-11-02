@@ -18,8 +18,6 @@ var callRequest = rpc.declare({ object: 'moca', method: 'request',
 var callCensus = rpc.declare({ object: 'moca', method: 'census', expect: {} });
 var callScan = rpc.declare({ object: 'moca', method: 'scan', params: [ 'deep' ], expect: {} });
 var callScanStatus = rpc.declare({ object: 'moca', method: 'scan_status', expect: {} });
-var callListen = rpc.declare({ object: 'moca', method: 'listen', params: [ 'node', 'mac' ], expect: {} });
-var callListenStatus = rpc.declare({ object: 'moca', method: 'listen_status', expect: {} });
 var callReaddress = rpc.declare({ object: 'moca', method: 'readdress',
 	params: [ 'ip', 'mac', 'newip', 'netmask', 'gateway', 'dhcp' ], expect: {} });
 var callAdopt = rpc.declare({ object: 'moca', method: 'adopt',
@@ -402,26 +400,6 @@ return view.extend({
 					_('%s is rebooting. Scan again to confirm its new address.').format(a.mac)));
 			});
 		}
-		function listen(mac) {
-			var node = -1;
-			return callCensus().then(function(c) {
-				(c.nodes || []).forEach(function(n) {
-					if ((n.guid || '').toLowerCase() == mac)
-						node = +n.node;
-				});
-				if (node < 0 || !window.confirm(
-				    _('Restart node %d (%s) and listen for its address? It leaves the coax for about a minute.').format(node, mac)))
-					return;
-				discResult.appendChild(E('p', {}, E('em', {}, _('Listening for %s…').format(mac))));
-				return callListen(String(node), mac).then(function() {
-					return waitFor(callListenStatus);
-				}).then(function(r) {
-					discResult.appendChild(E('p', {}, r.ip ?
-						_('%s is at %s. Add that subnet to the sweep, or scan again.').format(mac, r.ip) :
-						_('%s said nothing after its restart.').format(mac)));
-				});
-			});
-		}
 		function showScan(r) {
 			var found = r.found || [], shared = r.shared || [], missing = r.missing || [];
 			discResult.innerHTML = '';
@@ -465,12 +443,7 @@ return view.extend({
 				discResult.appendChild(E('p', { 'class': 'cbi-value-description' }, _('No adapters answered.')));
 			}
 			if (missing.length) {
-				discResult.appendChild(E('p', {}, _('On the coax, no address found:')));
-				missing.forEach(function(mac) {
-					var b = E('button', { 'class': 'cbi-button' }, _('Restart and listen'));
-					b.addEventListener('click', function() { b.disabled = true; listen(mac); });
-					discResult.appendChild(E('p', {}, [ mac, ' ', b ]));
-				});
+				discResult.appendChild(E('p', {}, _('On the coax, no address found: %s').format(missing.join(', '))));
 			}
 		}
 		function scan(deep) {

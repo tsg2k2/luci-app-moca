@@ -257,7 +257,7 @@ GUID**, which is always unique. Discovery and plug-and-play are built around tha
 `scan {deep}` runs in the background and `scan_status` returns its result. It starts from the census: an
 ARP sweep from sender 0.0.0.0 needs no address on the target's subnet, `globals.sweep` lists where to look and
 deep adds 192.168.0.0/16. Only MACs in the census are pinned and probed, so nothing else on the LAN sees a login
-attempt. `listen {node,mac}` restarts one node and watches its ARP. `readdress` moves one adapter by `/ms`
+attempt. `readdress` moves one adapter by `/ms`
 and reboots it, and a rescan confirms it.
 
 ### Plug-and-play (rpcd `adopt` method)

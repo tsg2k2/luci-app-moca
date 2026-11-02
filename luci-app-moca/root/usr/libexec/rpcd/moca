@@ -21,8 +21,6 @@
 CFG=moca_other
 SCAN_OUT=/tmp/moca-scan.json
 SCAN_IPS=/tmp/moca-scan.ips
-LISTEN_OUT=/tmp/moca-listen.json
-LISTEN_S=75
 SWEEP_DEFAULT="192.168.144.0/24 192.168.254.254 192.168.188.251 192.168.188.252 192.168.1.3"
 
 # MaxLinear / Entropic MoCA OUI hints (discovery is confirmed by an /ms probe,
@@ -384,49 +382,6 @@ method_scan_status() {
 	if [ -r "$SCAN_OUT" ]; then cat "$SCAN_OUT"; else echo '{"state":"idle"}'; fi
 }
 
-# The background half of `listen`: restart one node and watch what it says on return.
-bg_listen() {
-	local node="$1" mac="$2" d tmp="/tmp/.moca_listen.$$" ip
-	. /lib/functions.sh
-	config_load "$CFG"
-	config_get BR globals bridge "br-lan"
-	d="$(local_moca_dir)"
-	tcpdump -l -n -i "$BR" "ether src $mac and arp" > "$tmp" 2>/dev/null &
-	local pid=$!
-	sleep 1
-	echo "$((1 << node)) 0" > "$d/moca_node_reset" 2>/dev/null
-	sleep "$LISTEN_S"
-	kill "$pid" 2>/dev/null
-	ip="$(sed -n 's/.* tell \([0-9.]*\).*/\1/p; s/.*Reply \([0-9.]*\) is-at.*/\1/p' "$tmp" | grep -v '^0\.0\.0\.0$' | tail -1)"
-	json_init
-	json_add_string state done
-	json_add_string mac "$mac"
-	json_add_string ip "$ip"
-	json_dump > "$LISTEN_OUT.tmp"
-	mv "$LISTEN_OUT.tmp" "$LISTEN_OUT"
-	rm -f "$tmp"
-}
-
-# `listen {node,mac}`: last resort for a node the sweep did not find.  It drops that
-# node from the coax for a minute, so the caller asks first.
-method_listen() {
-	local input node mac
-	read -r input; json_load "$input"
-	json_get_var node node
-	json_get_var mac mac
-	case "$node" in [0-9]|1[0-5]) ;; *) json_init; json_add_string error "bad node"; json_dump; return ;; esac
-	case "$mac" in *[!0-9a-fA-F:]*|"") json_init; json_add_string error "bad mac"; json_dump; return ;; esac
-	command -v tcpdump >/dev/null || {
-		json_init; json_add_string error "tcpdump not installed"; json_dump; return; }
-	json_init; json_add_string state running; json_dump > "$LISTEN_OUT"
-	"$0" bg_listen "$node" "$mac" >/dev/null 2>&1 </dev/null &
-	cat "$LISTEN_OUT"
-}
-
-method_listen_status() {
-	if [ -r "$LISTEN_OUT" ]; then cat "$LISTEN_OUT"; else echo '{"state":"idle"}'; fi
-}
-
 ip2int() {
 	local IFS=. a b c d
 	set -- $1
@@ -685,7 +640,6 @@ method_request() {
 
 case "$1" in
 	bg_scan)   bg_scan "$2"; exit 0 ;;
-	bg_listen) bg_listen "$2" "$3"; exit 0 ;;
 esac
 
 case "$1" in
@@ -706,12 +660,6 @@ case "$1" in
 		json_add_string deep ""
 		json_close_object
 		json_add_object scan_status
-		json_close_object
-		json_add_object listen
-		json_add_string node ""
-		json_add_string mac ""
-		json_close_object
-		json_add_object listen_status
 		json_close_object
 		json_add_object readdress
 		json_add_string ip ""
@@ -747,8 +695,6 @@ case "$1" in
 			census)     method_census ;;
 			scan)       method_scan ;;
 			scan_status) method_scan_status ;;
-			listen)     method_listen ;;
-			listen_status) method_listen_status ;;
 			readdress)  method_readdress ;;
 			node_reset) method_node_reset ;;
 			node_cmd)   method_node_cmd ;;
