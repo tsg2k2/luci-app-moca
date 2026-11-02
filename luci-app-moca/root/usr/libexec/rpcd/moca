@@ -391,7 +391,7 @@ ip2int() {
 # `readdress {ip,mac,newip,netmask,gateway,dhcp}`: one adapter, at the caller's
 # explicit request; it reboots to take the address.  The caller rescans to verify.
 method_readdress() {
-	local input ip mac newip netmask gateway dhcp cred hdr code v
+	local input ip mac newip netmask gateway dhcp cred hdr code v jar tok
 	read -r input; json_load "$input"
 	json_get_var ip ip
 	json_get_var mac mac
@@ -414,7 +414,9 @@ method_readdress() {
 		json_init; json_add_string error "address is this router's"; json_dump; return; }
 	for cred in $CREDS; do
 		hdr="$(basic_hdr "$cred")"
-		case "$(curl -s -m 3 -H "$hdr" -X POST "http://$ip/ms/1/0x303/GET" 2>/dev/null)" in
+		# a just-restarted adapter answers its first request 401, right login or not
+		case "$(curl -s -m 3 -H "$hdr" -o /dev/null -X POST "http://$ip/ms/1/0x303/GET" 2>/dev/null
+			curl -s -m 3 -H "$hdr" -X POST "http://$ip/ms/1/0x303/GET" 2>/dev/null)" in
 			*'"data"'*) break ;;
 		esac
 		hdr=""
@@ -422,10 +424,16 @@ method_readdress() {
 	[ -n "$hdr" ] || {
 		reach_end "$ip"; json_init; json_add_string error "no working login"; json_dump; return; }
 
-	put() {
-		curl -s -m 5 -o /dev/null -w '%{http_code}' -H "$hdr" -X POST \
-			-d "{\"data\":[$2]}" "http://$ip/ms/1/$1/PUT" 2>/dev/null
+	# the same csrf_token dance as the writes in method_request
+	jar="/tmp/.moca_csrf.$$"
+	curl -s -m 3 -c "$jar" -H "$hdr" -o /dev/null "http://$ip/" 2>/dev/null
+	tok="$(awk '/csrf_token/{print $7}' "$jar" 2>/dev/null)"
+	post() {
+		curl -s -m 5 -o /dev/null -w '%{http_code}' -H "$hdr" -b "$jar" \
+			-H "X-CSRF-TOKEN: $tok" -H 'Content-Type: application/x-www-form-urlencoded' \
+			-H 'Accept: text/html, */*' --data "$2" -X POST "http://$ip/ms/1/$1" 2>/dev/null
 	}
+	put() { post "$1/PUT" "{\"data\":[$2]}"; }
 	if [ "$dhcp" = 1 ]; then
 		code="$(put 0x217 1)"
 	else
@@ -435,11 +443,12 @@ method_readdress() {
 		[ "$code" = 200 ] && [ -n "$gateway" ] && code="$(put 0x211 "$(ip2int "$gateway")")"
 	fi
 	if [ "$code" = 200 ]; then
-		curl -s -m 5 -o /dev/null -H "$hdr" -X POST "http://$ip/ms/1/0xb00" 2>/dev/null
+		post 0xb00 '{"data":[]}' >/dev/null
 		json_init; json_add_boolean ok 1
 	else
 		json_init; json_add_string error "adapter refused the write ($code)"
 	fi
+	rm -f "$jar"
 	reach_end "$ip"
 	json_dump
 }
