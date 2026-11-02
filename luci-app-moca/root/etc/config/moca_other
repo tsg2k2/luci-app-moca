@@ -19,12 +19,6 @@ config globals 'globals'
 	option timeout '6'
 	# Bridge that reaches the coax/MoCA segment (adapters live behind it).
 	option bridge 'br-lan'
-	# Factory-fresh adapters ship on a per-model static mgmt IP off the LAN
-	# subnet.  Discovery enumerates every MAC answering these IP(s) via ARP and
-	# probes each.  Observed defaults: Frontier FCA251 192.168.188.251 /
-	# FC252 192.168.188.252; GoCoax 192.168.144.200; Verizon ASK-MAE340
-	# 192.168.1.1.
-	option static_ips '192.168.188.251 192.168.188.252 192.168.144.200'
-	# To reach those off-subnet shared IPs, discovery temporarily adds this
-	# alias to the bridge (leave empty to skip the static scan, rely on DHCP).
-	option static_alias '192.168.188.2/24'
+	# Discovery probes these by ARP from sender 0.0.0.0, so no address is needed
+	# on their subnets.  Add a site's own subnet here if adapters were moved.
+	option sweep '192.168.144.0/24 192.168.254.254 192.168.188.251 192.168.188.252 192.168.1.3'

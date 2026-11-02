@@ -19,6 +19,11 @@
 . /usr/share/libubox/jshn.sh
 
 CFG=moca_other
+SCAN_OUT=/tmp/moca-scan.json
+SCAN_IPS=/tmp/moca-scan.ips
+LISTEN_OUT=/tmp/moca-listen.json
+LISTEN_S=75
+SWEEP_DEFAULT="192.168.144.0/24 192.168.254.254 192.168.188.251 192.168.188.252 192.168.1.3"
 
 # MaxLinear / Entropic MoCA OUI hints (discovery is confirmed by an /ms probe,
 # not by OUI; these only rank candidates first).
@@ -81,7 +86,8 @@ discover_creds() {
 	}
 	config_foreach add_cred adapter
 	# Factory defaults: frontier, verizon, gocoax (new+old), generic.
-	printf '%s\n' admin:cambridge admin:admin admin:gocoaxx admin:goCoax@2018 admin:password
+	printf '%s\n' admin:cambridge admin:admin admin:gocoax admin:gocoaxx admin:goCoax@2018 \
+		admin:actiontec admin:motorola admin:maxlinear admin:password
 }
 
 # Map a working "user:pass" back to a vendor profile (inverse of the factory
@@ -89,7 +95,7 @@ discover_creds() {
 cred_vendor() {
 	case "$1" in
 		*:cambridge)            echo frontier ;;
-		*:gocoaxx|*:goCoax@2018) echo gocoax ;;
+		*:gocoax|*:gocoaxx|*:goCoax@2018) echo gocoax ;;
 		*:admin)                echo verizon ;;
 		*)                      echo generic ;;
 	esac
@@ -269,6 +275,218 @@ local_moca_dir() {
 	local nf
 	nf="$(find /sys/devices -name moca_nodes 2>/dev/null | head -1)"
 	[ -n "$nf" ] && dirname "$nf"
+}
+
+# The MoCA GUIDs of the coax nodes other than this one, lower case, one per line.
+census_guids() {
+	local nf="$(local_moca_dir)/moca_nodes"
+
+	[ -r "$nf" ] && awk '!/role=self/ { for (i = 1; i <= NF; i++) if ($i ~ /^guid=/) print tolower(substr($i, 6)) }' "$nf"
+}
+
+# reach_begin <ip> <mac>: make one adapter on any subnet reachable, even if others
+# share its IP.  The neighbour is pinned so the address means this MAC only.
+# REACH_SRC is what reach_end removes.
+reach_begin() {
+	local ip="$1" mac="$2" r d=2
+
+	REACH_SRC=""
+	r="$(ip route get "$ip" 2>/dev/null)"
+	case "$r" in
+	local*) return 1 ;;
+	*" via "*|"")
+		# a source on its subnet that nothing answered for
+		while [ "${ip%.*}.$d" = "$ip" ] || grep -q "^${ip%.*}\.$d " "$SCAN_IPS" 2>/dev/null; do
+			d=$((d + 1))
+		done
+		REACH_SRC="${ip%.*}.$d"
+		ip addr add "$REACH_SRC/32" dev "$BR" 2>/dev/null
+		ip route replace "$ip/32" dev "$BR" src "$REACH_SRC"
+		;;
+	esac
+	ip neigh replace "$ip" lladdr "$mac" dev "$BR" nud permanent
+}
+
+reach_end() {
+	local ip="$1"
+
+	ip neigh del "$ip" dev "$BR" 2>/dev/null
+	[ -n "$REACH_SRC" ] || return 0
+	ip route del "$ip/32" dev "$BR" 2>/dev/null
+	ip addr del "$REACH_SRC/32" dev "$BR" 2>/dev/null
+}
+
+# The background half of `scan`.  Starts from the census: an adapter is found when
+# its GUID has an address, however many others answer on that address.
+bg_scan() {
+	local deep="$1" sweep bw tmp="/tmp/.moca_scan.$$" ip mac
+	. /lib/functions.sh
+	CREDS="$(discover_creds | awk '!seen[$0]++')"
+	config_load "$CFG"
+	config_get BR    globals bridge "br-lan"
+	config_get sweep globals sweep "$SWEEP_DEFAULT"
+	config_get bw    globals sweep_bandwidth "2M"
+	[ "$deep" = 1 ] && sweep="$sweep 192.168.0.0/16"
+
+	# Sender 0.0.0.0: answered from any subnet, no address needed on ours.
+	arp-scan -I "$BR" --arpspa=0.0.0.0 --retry=2 --bandwidth="$bw" --plain \
+		--format='${ip} ${mac}' $sweep 2>/dev/null > "$tmp"
+	[ -f /tmp/dhcp.leases ] && awk '{print $3, $2}' /tmp/dhcp.leases >> "$tmp"
+	ip neigh show dev "$BR" 2>/dev/null | awk '/lladdr/ {print $1, $3}' >> "$tmp"
+	tr 'A-F' 'a-f' < "$tmp" | grep -E '^[0-9.]+ ([0-9a-f]{2}:){5}[0-9a-f]{2}$' | sort -u > "$tmp.u"
+	census_guids > "$tmp.g"
+	cp "$tmp.u" "$SCAN_IPS"
+
+	json_init
+	json_add_array found
+	while read -r ip mac; do
+		# only coax nodes: anything else on the LAN never sees a login attempt
+		grep -qx "$mac" "$tmp.g" || continue
+		reach_begin "$ip" "$mac" || continue
+		probe_ms "$ip" "$mac" "scan" || {
+			json_add_object ""
+			json_add_string ip "$ip"
+			json_add_string mac "$mac"
+			json_add_string via "arp"
+			json_close_object
+		}
+		reach_end "$ip"
+	done < "$tmp.u"
+	json_close_array
+	json_add_array shared
+	grep -Ff "$tmp.g" "$tmp.u" | awk '{print $1}' | sort | uniq -d > "$tmp.d"
+	while read -r ip; do json_add_string "" "$ip"; done < "$tmp.d"
+	json_close_array
+	json_add_array missing
+	while read -r mac; do
+		grep -q " $mac$" "$tmp.u" || json_add_string "" "$mac"
+	done < "$tmp.g"
+	json_close_array
+	json_add_string state done
+	json_dump > "$SCAN_OUT.tmp"
+	mv "$SCAN_OUT.tmp" "$SCAN_OUT"
+	rm -f "$tmp" "$tmp".*
+}
+
+# `scan {deep}`: runs in the background, longer than a ubus call may take.
+method_scan() {
+	local input deep
+	read -r input; json_load "$input"
+	json_get_var deep deep
+	command -v arp-scan >/dev/null || {
+		json_init; json_add_string error "arp-scan not installed"; json_dump; return; }
+	json_init; json_add_string state running; json_dump > "$SCAN_OUT"
+	"$0" bg_scan "$deep" >/dev/null 2>&1 </dev/null &
+	cat "$SCAN_OUT"
+}
+
+method_scan_status() {
+	if [ -r "$SCAN_OUT" ]; then cat "$SCAN_OUT"; else echo '{"state":"idle"}'; fi
+}
+
+# The background half of `listen`: restart one node and watch what it says on return.
+bg_listen() {
+	local node="$1" mac="$2" d tmp="/tmp/.moca_listen.$$" ip
+	. /lib/functions.sh
+	config_load "$CFG"
+	config_get BR globals bridge "br-lan"
+	d="$(local_moca_dir)"
+	tcpdump -l -n -i "$BR" "ether src $mac and arp" > "$tmp" 2>/dev/null &
+	local pid=$!
+	sleep 1
+	echo "$((1 << node)) 0" > "$d/moca_node_reset" 2>/dev/null
+	sleep "$LISTEN_S"
+	kill "$pid" 2>/dev/null
+	ip="$(sed -n 's/.* tell \([0-9.]*\).*/\1/p; s/.*Reply \([0-9.]*\) is-at.*/\1/p' "$tmp" | grep -v '^0\.0\.0\.0$' | tail -1)"
+	json_init
+	json_add_string state done
+	json_add_string mac "$mac"
+	json_add_string ip "$ip"
+	json_dump > "$LISTEN_OUT.tmp"
+	mv "$LISTEN_OUT.tmp" "$LISTEN_OUT"
+	rm -f "$tmp"
+}
+
+# `listen {node,mac}`: last resort for a node the sweep did not find.  It drops that
+# node from the coax for a minute, so the caller asks first.
+method_listen() {
+	local input node mac
+	read -r input; json_load "$input"
+	json_get_var node node
+	json_get_var mac mac
+	case "$node" in [0-9]|1[0-5]) ;; *) json_init; json_add_string error "bad node"; json_dump; return ;; esac
+	case "$mac" in *[!0-9a-fA-F:]*|"") json_init; json_add_string error "bad mac"; json_dump; return ;; esac
+	command -v tcpdump >/dev/null || {
+		json_init; json_add_string error "tcpdump not installed"; json_dump; return; }
+	json_init; json_add_string state running; json_dump > "$LISTEN_OUT"
+	"$0" bg_listen "$node" "$mac" >/dev/null 2>&1 </dev/null &
+	cat "$LISTEN_OUT"
+}
+
+method_listen_status() {
+	if [ -r "$LISTEN_OUT" ]; then cat "$LISTEN_OUT"; else echo '{"state":"idle"}'; fi
+}
+
+ip2int() {
+	local IFS=. a b c d
+	set -- $1
+	echo "$(( ($1 << 24) + ($2 << 16) + ($3 << 8) + $4 ))"
+}
+
+# `readdress {ip,mac,newip,netmask,gateway,dhcp}`: one adapter, at the caller's
+# explicit request; it reboots to take the address.  The caller rescans to verify.
+method_readdress() {
+	local input ip mac newip netmask gateway dhcp cred hdr code v
+	read -r input; json_load "$input"
+	json_get_var ip ip
+	json_get_var mac mac
+	json_get_var newip newip
+	json_get_var netmask netmask
+	json_get_var gateway gateway
+	json_get_var dhcp dhcp
+	for v in "$ip" "$newip" "$netmask" "$gateway"; do
+		case "$v" in *[!0-9.]*) json_init; json_add_string error "bad address"; json_dump; return ;; esac
+	done
+	case "$mac" in *[!0-9a-fA-F:]*|"") json_init; json_add_string error "bad mac"; json_dump; return ;; esac
+	[ -n "$ip" ] && { [ "$dhcp" = 1 ] || [ -n "$newip" ]; } || {
+		json_init; json_add_string error "missing address"; json_dump; return; }
+
+	. /lib/functions.sh
+	CREDS="$(discover_creds | awk '!seen[$0]++')"
+	config_load "$CFG"
+	config_get BR globals bridge "br-lan"
+	reach_begin "$ip" "$mac" || {
+		json_init; json_add_string error "address is this router's"; json_dump; return; }
+	for cred in $CREDS; do
+		hdr="$(basic_hdr "$cred")"
+		case "$(curl -s -m 3 -H "$hdr" -X POST "http://$ip/ms/1/0x303/GET" 2>/dev/null)" in
+			*'"data"'*) break ;;
+		esac
+		hdr=""
+	done
+	[ -n "$hdr" ] || {
+		reach_end "$ip"; json_init; json_add_string error "no working login"; json_dump; return; }
+
+	put() {
+		curl -s -m 5 -o /dev/null -w '%{http_code}' -H "$hdr" -X POST \
+			-d "{\"data\":[$2]}" "http://$ip/ms/1/$1/PUT" 2>/dev/null
+	}
+	if [ "$dhcp" = 1 ]; then
+		code="$(put 0x217 1)"
+	else
+		code="$(put 0x217 0)"
+		[ "$code" = 200 ] && code="$(put 0x20b "$(ip2int "$newip")")"
+		[ "$code" = 200 ] && [ -n "$netmask" ] && code="$(put 0x210 "$(ip2int "$netmask")")"
+		[ "$code" = 200 ] && [ -n "$gateway" ] && code="$(put 0x211 "$(ip2int "$gateway")")"
+	fi
+	if [ "$code" = 200 ]; then
+		curl -s -m 5 -o /dev/null -H "$hdr" -X POST "http://$ip/ms/1/0xb00" 2>/dev/null
+		json_init; json_add_boolean ok 1
+	else
+		json_init; json_add_string error "adapter refused the write ($code)"
+	fi
+	reach_end "$ip"
+	json_dump
 }
 
 # L2ME node census from the local chip: every coax node by GUID + role + rates,
@@ -466,6 +684,11 @@ method_request() {
 }
 
 case "$1" in
+	bg_scan)   bg_scan "$2"; exit 0 ;;
+	bg_listen) bg_listen "$2" "$3"; exit 0 ;;
+esac
+
+case "$1" in
 	list)
 		json_init
 		json_add_object list
@@ -478,6 +701,25 @@ case "$1" in
 		json_add_object discover
 		json_close_object
 		json_add_object census
+		json_close_object
+		json_add_object scan
+		json_add_string deep ""
+		json_close_object
+		json_add_object scan_status
+		json_close_object
+		json_add_object listen
+		json_add_string node ""
+		json_add_string mac ""
+		json_close_object
+		json_add_object listen_status
+		json_close_object
+		json_add_object readdress
+		json_add_string ip ""
+		json_add_string mac ""
+		json_add_string newip ""
+		json_add_string netmask ""
+		json_add_string gateway ""
+		json_add_string dhcp ""
 		json_close_object
 		json_add_object node_reset
 		json_add_string nodemask ""
@@ -503,6 +745,11 @@ case "$1" in
 			request)    method_request ;;
 			discover)   method_discover ;;
 			census)     method_census ;;
+			scan)       method_scan ;;
+			scan_status) method_scan_status ;;
+			listen)     method_listen ;;
+			listen_status) method_listen_status ;;
+			readdress)  method_readdress ;;
 			node_reset) method_node_reset ;;
 			node_cmd)   method_node_cmd ;;
 			adopt)      method_adopt ;;

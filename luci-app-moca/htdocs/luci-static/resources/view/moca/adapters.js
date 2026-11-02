@@ -15,7 +15,13 @@
 var callList = rpc.declare({ object: 'moca', method: 'list', expect: { adapters: [] } });
 var callRequest = rpc.declare({ object: 'moca', method: 'request',
 	params: [ 'id', 'path', 'body' ], expect: {} });
-var callDiscover = rpc.declare({ object: 'moca', method: 'discover', expect: { found: [] } });
+var callCensus = rpc.declare({ object: 'moca', method: 'census', expect: {} });
+var callScan = rpc.declare({ object: 'moca', method: 'scan', params: [ 'deep' ], expect: {} });
+var callScanStatus = rpc.declare({ object: 'moca', method: 'scan_status', expect: {} });
+var callListen = rpc.declare({ object: 'moca', method: 'listen', params: [ 'node', 'mac' ], expect: {} });
+var callListenStatus = rpc.declare({ object: 'moca', method: 'listen_status', expect: {} });
+var callReaddress = rpc.declare({ object: 'moca', method: 'readdress',
+	params: [ 'ip', 'mac', 'newip', 'netmask', 'gateway', 'dhcp' ], expect: {} });
 var callAdopt = rpc.declare({ object: 'moca', method: 'adopt',
 	params: [ 'mac', 'ip', 'name', 'vendor', 'username', 'password', 'reserve' ], expect: {} });
 
@@ -370,23 +376,56 @@ return view.extend({
 		/* discovery */
 		var discResult = E('div');
 		var discBtn = E('button', { 'class': 'cbi-button cbi-button-action' }, _('Scan the coax network'));
+		var deepBtn = E('button', { 'class': 'cbi-button' }, _('Deep scan (192.168.0.0/16)'));
 		function chipName(v) {
 			var n = parseInt(v, 16);
 			return (!isNaN(n) && CHIPS[n - 0x15]) ? CHIPS[n - 0x15] : (v ? ('chip ' + v) : '–');
 		}
-		discBtn.addEventListener('click', function() {
-			discBtn.disabled = true;
-			discResult.innerHTML = '';
-			discResult.appendChild(E('em', {}, _('Scanning (DHCP leases + shared static IP)…')));
-			callDiscover().then(function(found) {
-				discBtn.disabled = false;
-				discResult.innerHTML = '';
-				if (!found || !found.length) {
-					discResult.appendChild(E('p', { 'class': 'cbi-value-description' },
-						_('No MoCA adapters found. Factory-fresh units may need the ' +
-						  'static-IP alias set in /etc/config/moca_other.')));
+		function waitFor(status) {
+			return status().then(function(r) {
+				if (r.state != 'running')
+					return r;
+				return new Promise(function(done) { window.setTimeout(done, 2000); })
+					.then(function() { return waitFor(status); });
+			});
+		}
+		function move(a) {
+			var newip = window.prompt(_('New management address for %s (%s). Empty = DHCP. ' +
+				'It reboots to take the address.').format(a.ip, a.mac));
+			if (newip === null)
+				return;
+			var mask = newip ? window.prompt(_('Netmask'), '255.255.255.0') : '';
+			if (mask === null)
+				return;
+			callReaddress(a.ip, a.mac, newip, mask, '', newip ? '0' : '1').then(function(r) {
+				ui.addNotification(null, E('p', {}, r.error ? r.error :
+					_('%s is rebooting. Scan again to confirm its new address.').format(a.mac)));
+			});
+		}
+		function listen(mac) {
+			var node = -1;
+			return callCensus().then(function(c) {
+				(c.nodes || []).forEach(function(n) {
+					if ((n.guid || '').toLowerCase() == mac)
+						node = +n.node;
+				});
+				if (node < 0 || !window.confirm(
+				    _('Restart node %d (%s) and listen for its address? It leaves the coax for about a minute.').format(node, mac)))
 					return;
-				}
+				discResult.appendChild(E('p', {}, E('em', {}, _('Listening for %s…').format(mac))));
+				return callListen(String(node), mac).then(function() {
+					return waitFor(callListenStatus);
+				}).then(function(r) {
+					discResult.appendChild(E('p', {}, r.ip ?
+						_('%s is at %s. Add that subnet to the sweep, or scan again.').format(mac, r.ip) :
+						_('%s said nothing after its restart.').format(mac)));
+				});
+			});
+		}
+		function showScan(r) {
+			var found = r.found || [], shared = r.shared || [], missing = r.missing || [];
+			discResult.innerHTML = '';
+			if (found.length) {
 				var tbl = E('table', { 'class': 'table' }, [
 					E('tr', { 'class': 'tr table-titles' }, [
 						E('th', { 'class': 'th' }, _('IP')), E('th', { 'class': 'th' }, _('MAC')),
@@ -398,6 +437,7 @@ return view.extend({
 					var vendor = a.vendor || 'generic';
 					var vlabel = (VENDORS[vendor] || {}).label || vendor;
 					var adopt = E('button', { 'class': 'cbi-button cbi-button-add' }, _('Adopt'));
+					var mv = E('button', { 'class': 'cbi-button' }, _('Change address'));
 					adopt.addEventListener('click', function() {
 						adopt.disabled = true;
 						/* carry the discovered vendor + username through; the password
@@ -409,32 +449,57 @@ return view.extend({
 							window.setTimeout(function() { location.reload(); }, 800);
 						});
 					});
+					mv.addEventListener('click', function() { move(a); });
 					tbl.appendChild(E('tr', { 'class': 'tr' }, [
-						E('td', { 'class': 'td' }, a.ip),
+						E('td', { 'class': 'td' }, a.ip + (shared.indexOf(a.ip) >= 0 ? ' ' + _('(shared)') : '')),
 						E('td', { 'class': 'td' }, a.mac || '–'),
-						E('td', { 'class': 'td' }, chipName(a.chip)),
-						E('td', { 'class': 'td' }, vlabel),
+						E('td', { 'class': 'td' }, a.chip ? chipName(a.chip) : '–'),
+						E('td', { 'class': 'td' }, a.chip ? vlabel : _('no known web API')),
 						E('td', { 'class': 'td' }, a.via),
-						E('td', { 'class': 'td' }, adopt)
+						E('td', { 'class': 'td' }, a.chip ? [ adopt, ' ', mv ] : '')
 					]));
 				});
 				discResult.appendChild(tbl);
-			}).catch(function(e) {
-				discBtn.disabled = false;
+			}
+			else {
+				discResult.appendChild(E('p', { 'class': 'cbi-value-description' }, _('No adapters answered.')));
+			}
+			if (missing.length) {
+				discResult.appendChild(E('p', {}, _('On the coax, no address found:')));
+				missing.forEach(function(mac) {
+					var b = E('button', { 'class': 'cbi-button' }, _('Restart and listen'));
+					b.addEventListener('click', function() { b.disabled = true; listen(mac); });
+					discResult.appendChild(E('p', {}, [ mac, ' ', b ]));
+				});
+			}
+		}
+		function scan(deep) {
+			discBtn.disabled = deepBtn.disabled = true;
+			discResult.innerHTML = '';
+			discResult.appendChild(E('em', {}, _('Scanning…')));
+			return callScan(deep).then(function(r) {
+				if (r.error)
+					throw new Error(r.error);
+				return waitFor(callScanStatus);
+			}).then(showScan).catch(function(e) {
 				discResult.innerHTML = '';
 				discResult.appendChild(E('p', { 'class': 'alert-message warning' },
 					_('Discovery failed: ') + (e.message || e)));
+			}).then(function() {
+				discBtn.disabled = deepBtn.disabled = false;
 			});
-		});
+		}
+		discBtn.addEventListener('click', function() { scan('0'); });
+		deepBtn.addEventListener('click', function() { scan('1'); });
 
 		var discovery = E('div', { 'class': 'cbi-map' }, [
 			E('h2', {}, _('Discover adapters')),
 			E('div', { 'class': 'cbi-section' }, [
 				E('p', { 'class': 'cbi-value-description' },
-					_('Finds MoCA adapters via DHCP leases and the shared factory static ' +
-					  'IP (ARP-enumerated). Adopt adds them to the inventory with a DHCP ' +
-					  'reservation for a stable address.')),
-				discBtn, ' ', discResult
+					_('Starts from the nodes on the coax and looks for each one by MAC, on any ' +
+					  'subnet, even when several share an address. Adopt adds one to the ' +
+					  'inventory with a DHCP reservation.')),
+				discBtn, ' ', deepBtn, ' ', discResult
 			])
 		]);
 
