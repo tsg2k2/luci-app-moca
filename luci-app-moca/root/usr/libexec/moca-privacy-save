@@ -1,0 +1,37 @@
+#!/bin/sh
+# Save what a finished MPS pairing left in the MoCA report.  The driver gets the
+# password too, so a re-init before the next boot keeps it.
+
+d=
+for f in /sys/class/mdio_bus/*/*:0f; do
+	[ -r "$f/moca_mps_privacy" ] && d="$f"
+done
+[ -n "$d" ] || exit 1
+
+# the report may not be ready yet when the chip raises the event
+i=0
+while ! grep -q 'valid=1 .*privacy_changed=1' "$d/moca_mps_report" 2>/dev/null; do
+	i=$((i + 1))
+	[ "$i" -lt 6 ] || exit 0
+	sleep 2
+done
+
+enabled="$(sed -n 's/^enabled=//p' "$d/moca_mps_privacy")"
+password="$(sed -n 's/^password=//p' "$d/moca_mps_privacy")"
+enhanced="$(sed -n 's/^enhanced_password=//p' "$d/moca_mps_privacy")"
+
+case "$enabled" in 0|1) ;; *) exit 1 ;; esac
+[ "$enabled" = 0 ] || [ -n "$password" ] || exit 1
+
+uci -q batch <<EOF
+set moca.settings.security_mode=$enabled
+set moca.settings.mps_saved=1
+EOF
+uci set moca.settings.password="$password"
+uci set moca.settings.enhanced_password="$enhanced"
+uci commit moca
+
+echo "$enabled" > "$d/moca_cfg_security_mode" 2>/dev/null
+[ -n "$password" ] && echo "$password" > "$d/moca_cfg_password" 2>/dev/null
+[ -n "$enhanced" ] && echo "$enhanced" > "$d/moca_cfg_enhanced_password" 2>/dev/null
+logger -t moca "saved the coax password from pairing"

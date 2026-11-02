@@ -68,6 +68,44 @@ moca_stage_profiles() {
 	MOCA_CHANGED=1
 }
 
+# Only re-admit (multi-second coax drop) when something actually changed from
+# what the driver already applied at boot.
+moca_finish() {
+	if [ "$MOCA_CHANGED" != 1 ]; then
+		logger -t moca "MoCA config matches running state; no re-init"
+		return 0
+	fi
+
+	echo 1 > "$MOCA_DIR/moca_cfg_apply" 2>/dev/null
+	logger -t moca "Applied MoCA configuration"
+}
+
+# What holds with or without "Manage MoCA settings": a GUID that survives a reboot
+# (the driver only has a random netdev MAC this early) and a paired coax password.
+moca_stage_identity() {
+	local guid mps_saved val
+
+	config_get guid settings guid
+	if [ -z "$guid" ]; then
+		. /usr/share/libubox/jshn.sh
+		. /lib/functions/system.sh
+		json_load_file /etc/board.json && json_select network && json_select wan &&
+			json_get_var guid macaddr
+		[ -n "$guid" ] || guid="$(cat /sys/class/net/wan/address 2>/dev/null)"
+		[ -n "$guid" ] && guid="$(macaddr_setbit_la "$guid")"
+	fi
+	[ -n "$guid" ] && moca_stage moca_guid "$guid"
+
+	config_get_bool mps_saved settings mps_saved 0
+	[ "$mps_saved" = 1 ] || return 0
+	config_get val settings security_mode
+	moca_stage moca_cfg_security_mode "$val"
+	config_get val settings password
+	moca_stage_secret moca_cfg_password "$val"
+	config_get val settings enhanced_password
+	moca_stage_secret moca_cfg_enhanced_password "$val"
+}
+
 moca_apply_config() {
 	local enabled lof preferred_nc network_search security_mode network_name
 	local password enhanced_password enhanced_privacy_mode
@@ -80,7 +118,12 @@ moca_apply_config() {
 
 	config_load moca
 	config_get_bool enabled       settings enabled 0
-	[ "$enabled" = 1 ] || return 0
+	MOCA_CHANGED=0
+	moca_stage_identity
+	[ "$enabled" = 1 ] || {
+		moca_finish
+		return 0
+	}
 
 	config_get lof            settings lof
 	config_get preferred_nc   settings preferred_nc
@@ -94,7 +137,6 @@ moca_apply_config() {
 	config_get max_tx_power   settings max_tx_power
 	config_get freq_band_mask settings freq_band_mask
 
-	MOCA_CHANGED=0
 	moca_stage moca_cfg_lof            "$lof"
 	moca_stage moca_cfg_preferred_nc   "$preferred_nc"
 	moca_stage moca_cfg_network_search "$network_search"
@@ -113,15 +155,7 @@ moca_apply_config() {
 	moca_stage_secret moca_cfg_password          "$password"
 	moca_stage_secret moca_cfg_enhanced_password "$enhanced_password"
 
-	# Only re-admit (multi-second coax drop) when something actually changed
-	# from what the driver already applied at boot.
-	if [ "$MOCA_CHANGED" != 1 ]; then
-		logger -t moca "MoCA config matches running state; no re-init"
-		return 0
-	fi
-
-	echo 1 > "$MOCA_DIR/moca_cfg_apply" 2>/dev/null
-	logger -t moca "Applied MoCA configuration"
+	moca_finish
 }
 
 start_service() {

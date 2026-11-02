@@ -1,6 +1,7 @@
 'use strict';
 'require view';
 'require fs';
+'require rpc';
 'require poll';
 
 /* CR1000A MXL3711 MoCA PHY sysfs directory. */
@@ -24,6 +25,8 @@ var OVERVIEW = [
 	  function(v) { return (v == '1') ? _('enabled') : _('disabled'); } ],
 	[ 'moca_soc_health',       _('SoC health') ],
 	[ 'moca_frame_drops',      _('Frames dropped') ],
+	[ 'moca_link_resets',      _('Link resets') ],
+	[ 'moca_admission_status', _('Last admission status') ],
 	[ 'moca_phy_rates',        _('PHY rates per node') ]
 ];
 
@@ -43,18 +46,54 @@ function readAll() {
 		});
 }
 
+var callMpsStart = rpc.declare({ object: 'moca', method: 'mps_start', expect: {} });
+var callMpsStatus = rpc.declare({ object: 'moca', method: 'mps_status', expect: {} });
+
 return view.extend({
 	load: function() {
 		return readAll();
 	},
 
 	render: function(data) {
+		var mpsBtn = E('button', { 'class': 'cbi-button' }, _('Pair'));
+		var mpsResult = E('span');
 		var container = E('div', { 'class': 'cbi-map' }, [
 			E('h2', {}, _('MoCA 2.5 Status')),
 			E('div', { 'class': 'cbi-section' }, [
 				E('div', { 'id': 'moca-overview' })
+			]),
+			E('div', { 'class': 'cbi-section' }, [
+				E('h3', {}, _('Pair a node')),
+				E('p', { 'class': 'cbi-value-description' }, _('Press this, then the pairing button on the other node within the walk time. Pairing can change the coax password for the whole network; the new one is saved here.')),
+				mpsBtn, ' ', mpsResult
 			])
 		]);
+
+		function mpsWait() {
+			return new Promise(function(done) { window.setTimeout(done, 2000); })
+				.then(callMpsStatus)
+				.then(function(r) {
+					if (r.state == 'running')
+						return mpsWait();
+					mpsBtn.disabled = false;
+					mpsResult.textContent = r.result || r.state;
+				});
+		}
+
+		mpsBtn.addEventListener('click', function() {
+			if (!window.confirm(_('Start pairing? This can change the coax password for the whole network.')))
+				return;
+			mpsBtn.disabled = true;
+			mpsResult.textContent = _('Waiting for the other node…');
+			callMpsStart().then(function(r) {
+				if (r.error) {
+					mpsBtn.disabled = false;
+					mpsResult.textContent = r.error;
+					return;
+				}
+				return mpsWait();
+			});
+		});
 
 		function update(d) {
 			var rows = OVERVIEW.map(function(r) {

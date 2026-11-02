@@ -74,6 +74,10 @@ function decEcb(w) {
 		' SGMII0(rxbad=' + w[10] + ' txdma=' + w[11] + ')' +
 		' RxAPDUcrc=' + (w[15] || 0) + ' RxPDUcrc=' + (w[16] || 0) + ' TxDrop=' + (w[17] || 0);
 }
+function decEphy(w) {
+	if (w.length < 12) return '';
+	return 'in=' + w[2] + ' out=' + w[8] + ' dropped=' + w[10];
+}
 function decRetx(w) {
 	var out = [];
 	for (var n = 0; n < 16 && (n * 2 + 1) < w.length; n++)
@@ -96,14 +100,14 @@ var MOCA_CMDS = [
 	{ g: 'phy', name: _('Rx profile'),       b: function(n) { return ['0x1010021', mwHex(n), '0x0', '0x0']; } },
 	{ g: 'phy', name: _('Spectrum'),         b: function(n) { return ['0x101001c', mwHex(n)]; } },
 	{ g: 'stats', ov: 1, name: _('Data stats'), d: decDataStats, b: function(n) { return ['0x101000b', mwHex(n)]; } },
-	{ g: 'stats', ov: 1, name: _('L2ME stats'), d: decL2me, b: function(n) { return ['0x1010056', mwHex(n)]; } },
-	{ g: 'stats', name: _('MAC data stats'),    b: function(n) { return ['0x101007e', mwHex(n)]; } },
-	{ g: 'stats', name: _('Aggregate stats'),   b: function(n) { return ['0x1010010', mwHex(n)]; } },
-	{ g: 'stats', name: _('Frame stats'),       b: function(n) { return ['0x1010014', mwHex(n)]; } },
-	{ g: 'stats', name: _('Retransmit stats'),  d: decRetx, b: function(n) { return ['0x1010026', mwHex(n)]; } },
-	{ g: 'stats', name: _('Fragmentation stats'), d: decFrag, b: function(n) { return ['0x1010054', mwHex(n)]; } },
-	{ g: 'stats', name: _('ECB stats'),         d: decEcb, b: function(n) { return ['0x1010093', mwHex(n)]; } },
-	{ g: 'stats', name: _('ePHY stats'),        b: function(n) { return ['0x1010013', mwHex(n)]; } },
+	{ g: 'stats', ov: 1, name: _('L2ME stats'), d: decL2me, b: function() { return ['0x1010056', '0x0']; } },
+	{ g: 'stats', name: _('MAC data stats'),    b: function() { return ['0x101007e', '0x0']; } },
+	{ g: 'stats', name: _('Aggregate stats'),   b: function() { return ['0x1010010', '0x0']; } },
+	{ g: 'stats', name: _('Frame stats'),       b: function() { return ['0x1010014', '0x0']; } },
+	{ g: 'stats', name: _('Retransmit stats'),  d: decRetx, b: function() { return ['0x1010026', '0x0']; } },
+	{ g: 'stats', name: _('Fragmentation stats'), d: decFrag, b: function() { return ['0x1010054', '0x0']; } },
+	{ g: 'stats', name: _('ECB stats'),         d: decEcb, b: function() { return ['0x1010093', '0x0']; } },
+	{ g: 'stats', name: _('ePHY stats'), d: decEphy, b: function() { return ['0x1010013', '0x0']; } },
 	{ g: 'power', ov: 1, name: _('Beacon power'), d: decBeacon, b: function() { return ['0x1010009']; } },
 	{ g: 'power', name: _('Set beacon power'), danger: 1,
 	  i: [ { k: 'p', l: _('Power'), def: '10' }, { k: 'q', l: _('Backoff'), def: '0' } ],
@@ -111,22 +115,20 @@ var MOCA_CMDS = [
 	{ g: 'power', name: _('Power-mode caps'),  d: decWord0, b: function() { return ['0x1010032']; } },
 	{ g: 'power', name: _('Power-mode state'), d: decWord0, b: function(n) { return ['0x1010033', mwHex(n)]; } },
 	{ g: 'power', name: _('MPS state'),        d: decWord0, b: function() { return ['0x1010092']; } },
-	{ g: 'power', name: _('Sleep'), danger: 1, i: [ { k: 'd', l: _('Duration'), def: '0' } ],
+	{ g: 'power', name: _('Sleep'), danger: 1, i: [ { k: 'd', l: _('State (1-3)'), def: '1' } ],
 	  b: function(n, v) { return ['0x1010030', mwHex(+v.d)]; } },
 	{ g: 'power', name: _('Wake'),             b: function() { return ['0x1010031', '0x0']; } },
 	{ g: 'manage', ov: 1, name: _('SoC status'), d: decSoc, b: function() { return ['0x1010001']; } },
 	{ g: 'manage', name: _('Reset node'), danger: 1, special: 'reset', i: [ { k: 's', l: _('Delay s'), def: '0' } ] },
-	{ g: 'manage', name: _('Request NC handoff'), danger: 1, b: function(n) { return ['0x1010019', mwHex(1 << n), '0x0']; } },
-	{ g: 'manage', name: _('Request LMO'), danger: 1, b: function(n) { return ['0x101001a', mwHex(1 << n), '0x0', '0x0', '0x0', '0x0']; } },
+	{ g: 'manage', name: _('Request NC handoff'), danger: 1, b: function(n) { return ['0x1010019', mwHex(n), '0x0']; } },
 	{ g: 'manage', name: _('Request NMS'), danger: 1, b: function(n) { return ['0x101001b', mwHex(n)]; } },
-	{ g: 'security', ov: 1, name: _('Security info'), b: function() { return ['0x1010051']; } },
-	{ g: 'security', name: _('Security stats'), d: decSec, b: function(n) { return ['0x1010052', mwHex(n)]; } },
+	{ g: 'security', name: _('Security stats'), d: decSec, b: function() { return ['0x1010052', '0x0']; } },
 	{ g: 'security', name: _('Enhanced security'), b: function() { return ['0x101005f']; } },
-	{ g: 'security', name: _('Endpoint detect'),   b: function() { return ['0x1010059']; } },
+	{ g: 'security', name: _('Energy detect'),   b: function() { return ['0x1010059']; } },
 	{ g: 'bridge', name: _('Switch table'),  b: function(n) { return ['0x1010071', mwHex(n), '0x0']; } },
-	{ g: 'bridge', name: _('Switch stats'),  b: function(n) { return ['0x1010072', mwHex(n)]; } },
+	{ g: 'bridge', name: _('Switch stats'),  b: function() { return ['0x1010072', '0x0']; } },
 	{ g: 'bridge', name: _('Switch config'), b: function(n) { return ['0x1010073', mwHex(n)]; } },
-	{ g: 'bridge', name: _('Bridge stats'),  b: function(n) { return ['0x1010011', mwHex(n)]; } },
+	{ g: 'bridge', name: _('Bridge stats'),  b: function() { return ['0x1010011', '0x0']; } },
 	{ g: 'bridge', name: _('Bridge table'),  b: function(n) { return ['0x1010012', mwHex(n), '0x0']; } },
 	{ g: 'bridge', name: _('Mcast filter mode'), d: decWord0, b: function() { return ['0x1010027']; } },
 	{ g: 'bridge', name: _('List QoS flows'), b: function() { return ['0x1010043', '0x0', '0x0', '0x0', '0x0']; } }
@@ -403,7 +405,7 @@ return view.extend({
 				matrixBtn, matrixBody,
 				E('h3', {}, _('L2ME command (advanced)')),
 				E('p', { 'class': 'cbi-value-description' },
-					_('Raw SoC/DCAP command "<cmdid> [hex words]" — e.g. 0x1010022 0x1 = ' +
+					_('Raw SoC command "<cmdid> [hex words]" — e.g. 0x1010022 0x1 = ' +
 					  'per-node PHY for node 1; 0x1010009 = beacon power.')),
 				cmdIn, ' ', cmdBtn, cmdOut
 			])

@@ -1,0 +1,3 @@
+#!/bin/sh
+# Pairing moved the coax password: keep it, or the node reverts at the next boot.
+[ "$MOCA_EVENT" = privacy ] && exec /usr/libexec/moca-privacy-save
