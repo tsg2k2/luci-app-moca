@@ -374,7 +374,7 @@ return view.extend({
 		/* discovery */
 		var discResult = E('div');
 		var discBtn = E('button', { 'class': 'cbi-button cbi-button-action' }, _('Scan the coax network'));
-		var deepBtn = E('button', { 'class': 'cbi-button' }, _('Deep scan (192.168.0.0/16)'));
+		var deepBtn = E('button', { 'class': 'cbi-button' }, _('Deep scan'));
 		function chipName(v) {
 			var n = parseInt(v, 16);
 			return (!isNaN(n) && CHIPS[n - 0x15]) ? CHIPS[n - 0x15] : (v ? ('chip ' + v) : '–');

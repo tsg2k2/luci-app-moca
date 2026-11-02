@@ -255,8 +255,10 @@ GUID**, which is always unique. Discovery and plug-and-play are built around tha
 ### Scan (rpcd `scan` method)
 
 `scan {deep}` runs in the background and `scan_status` returns its result. It starts from the census: an
-ARP sweep from sender 0.0.0.0 needs no address on the target's subnet, `globals.sweep` lists where to look and
-deep adds 192.168.0.0/16. Only MACs in the census are pinned and probed, so nothing else on the LAN sees a login
+ARP sweep from sender 0.0.0.0 needs no address on the target's subnet, and `globals.sweep` lists where to look.
+Deep runs `moca-sweep` for the nodes still without an address: one ICMP echo per /24, sent to the node's MAC and
+addressed to 255.255.255.255 from x.2. An adapter answers only from its own subnet, and its ARP for x.2 names
+its address. `globals.deep_subnets` lists the /16s, 256 frames each per node. Only MACs in the census are pinned and probed, so nothing else on the LAN sees a login
 attempt. `readdress` moves one adapter by `/ms`
 and reboots it, and a rescan confirms it.
 

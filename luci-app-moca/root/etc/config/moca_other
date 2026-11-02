@@ -22,3 +22,4 @@ config globals 'globals'
 	# Discovery probes these by ARP from sender 0.0.0.0, so no address is needed
 	# on their subnets.  Add a site's own subnet here if adapters were moved.
 	option sweep '192.168.144.0/24 192.168.254.254 192.168.188.251 192.168.188.252 192.168.1.3'
+	option deep_subnets '192.168 10.0 10.1 172.16'
