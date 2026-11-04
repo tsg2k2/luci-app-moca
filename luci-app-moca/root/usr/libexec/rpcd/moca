@@ -331,6 +331,12 @@ bg_scan() {
 	# Sender 0.0.0.0: answered from any subnet, no address needed on ours.
 	arp-scan -I "$BR" --arpspa=0.0.0.0 --retry=2 --bandwidth="$bw" --plain \
 		--format='${ip} ${mac}' $sweep 2>/dev/null > "$tmp"
+	# the bridge's own subnets (up to a /22), so a quiet adapter on the LAN shows up too
+	ip -4 -o addr show dev "$BR" 2>/dev/null | awk '{split($4, a, "/"); if (a[2] >= 22) print $4}' |
+		while read -r net; do
+			arp-scan -I "$BR" --retry=2 --bandwidth="$bw" --plain \
+				--format='${ip} ${mac}' "$net" 2>/dev/null
+		done >> "$tmp"
 	[ -f /tmp/dhcp.leases ] && awk '{print $3, $2}' /tmp/dhcp.leases >> "$tmp"
 	ip neigh show dev "$BR" 2>/dev/null | awk '/lladdr/ {print $1, $3}' >> "$tmp"
 	# deep: only the nodes still without an address, one frame per /24 to each
