@@ -70,13 +70,23 @@ moca_stage_profiles() {
 
 # Only re-admit (multi-second coax drop) when something actually changed from
 # what the driver already applied at boot.
+# A refused apply leaves the staged values (and the profile copies in /tmp)
+# looking current, so the next run would skip it: remember it and apply again.
+MOCA_APPLY_FAILED=/tmp/moca.apply_failed
+
 moca_finish() {
+	[ -e "$MOCA_APPLY_FAILED" ] && MOCA_CHANGED=1
 	if [ "$MOCA_CHANGED" != 1 ]; then
 		logger -t moca "MoCA config matches running state; no re-init"
 		return 0
 	fi
 
-	echo 1 > "$MOCA_DIR/moca_cfg_apply" 2>/dev/null
+	if ! echo 1 2>/dev/null > "$MOCA_DIR/moca_cfg_apply"; then
+		: > "$MOCA_APPLY_FAILED"
+		logger -p daemon.err -t moca "Failed to apply the MoCA configuration; the next restart tries again"
+		return 1
+	fi
+	rm -f "$MOCA_APPLY_FAILED"
 	logger -t moca "Applied MoCA configuration"
 }
 
@@ -123,7 +133,7 @@ moca_apply_config() {
 	moca_stage_identity
 	[ "$enabled" = 1 ] || {
 		moca_finish
-		return 0
+		return
 	}
 
 	config_get lof            settings lof

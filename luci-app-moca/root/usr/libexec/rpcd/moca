@@ -631,6 +631,7 @@ method_list() {
 }
 
 # Proxy one /ms call to a configured adapter.
+# `request {id, path, body}` (write access): any /ms call, reads and writes.
 method_request() {
 	local input id path body
 	read -r input
@@ -638,6 +639,34 @@ method_request() {
 	json_get_var id id
 	json_get_var path path
 	json_get_var body body
+	ms_proxy "$id" "$path" "$body"
+}
+
+# `get {id, path, body}` (read access): only calls that change nothing on the
+# adapter. A config read (<bank>/<param>/GET) or one of the status tables the
+# status page reads (bank 0: 0x15 node mask, 0x16 node info, 0x103 PHY rates),
+# with an empty body or one node number. Everything else is refused here,
+# before the adapter is contacted; it needs `request`.
+method_get() {
+	local input id path body
+	read -r input
+	json_load "$input"
+	json_get_var id id
+	json_get_var path path
+	json_get_var body body
+	path="${path#/}"; path="${path#ms/}"
+	echo "$path" | grep -qE '^([0-9]/0x[0-9a-fA-F]{1,8}/GET|0/0x(15|16|103))$' || {
+		json_init; json_add_string error "not a read: $path"; json_dump; return
+	}
+	[ -z "$body" ] || echo "$body" | grep -qE '^\{"data":\[[0-9]*\]\}$' || {
+		json_init; json_add_string error "bad body"; json_dump; return
+	}
+	ms_proxy "$id" "$path" "$body"
+}
+
+# Proxy one /ms call to the configured adapter <id>.
+ms_proxy() {
+	local id="$1" path="$2" body="$3"
 
 	[ -n "$id" ] && [ -n "$path" ] || {
 		json_init; json_add_string error "missing id/path"; json_dump; return
@@ -729,6 +758,11 @@ case "$1" in
 		json_add_string path ""
 		json_add_string body ""
 		json_close_object
+		json_add_object get
+		json_add_string id ""
+		json_add_string path ""
+		json_add_string body ""
+		json_close_object
 		json_add_object discover
 		json_close_object
 		json_add_object census
@@ -772,6 +806,7 @@ case "$1" in
 		case "$2" in
 			list)       method_list ;;
 			request)    method_request ;;
+			get)        method_get ;;
 			discover)   method_discover ;;
 			census)     method_census ;;
 			scan)       method_scan ;;

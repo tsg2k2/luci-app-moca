@@ -15,6 +15,8 @@
 var callList = rpc.declare({ object: 'moca', method: 'list', expect: { adapters: [] } });
 var callRequest = rpc.declare({ object: 'moca', method: 'request',
 	params: [ 'id', 'path', 'body' ], expect: {} });
+var callGet = rpc.declare({ object: 'moca', method: 'get',
+	params: [ 'id', 'path', 'body' ], expect: {} });
 var callCensus = rpc.declare({ object: 'moca', method: 'census', expect: {} });
 var callScan = rpc.declare({ object: 'moca', method: 'scan', params: [ 'deep' ], expect: {} });
 var callScanStatus = rpc.declare({ object: 'moca', method: 'scan_status', expect: {} });
@@ -33,8 +35,11 @@ var VENDORS = {
 var CHIPS = [ 'MXL370x', 'MXL371x', 'MXL372x', 'MXL373x' ];
 
 /* ---- /ms helpers (all knowledge of the param store lives here) ---- */
+/* reads go through `get` (read access: config GETs and the status tables),
+ * writes through `request` (write access) */
 function ms(id, path, body) {
-	return callRequest(id, path, body || '{"data":[]}').then(function(r) {
+	var call = /\/PUT$/.test(path) ? callRequest : callGet;
+	return call(id, path, body || '{"data":[]}').then(function(r) {
 		r = r || {};
 		var data = null;
 		if (r.raw) {
@@ -332,7 +337,8 @@ return view.extend({
 	load: function() {
 		return Promise.all([
 			callList().catch(function() { return []; }),
-			uci.load('moca_other')
+			/* the inventory (with the passwords) is readable only with write access */
+			L.resolveDefault(uci.load('moca_other'), null)
 		]);
 	},
 
@@ -484,6 +490,8 @@ return view.extend({
 					_('No adapters configured yet. Add one above, then Save & Apply.')))
 		]);
 
+		if (data[1] === null)
+			return E('div', {}, [ live ]);
 		return m.render().then(function(mapEl) {
 			return E('div', {}, [ mapEl, discovery, live ]);
 		});
