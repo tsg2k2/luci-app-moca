@@ -24,6 +24,13 @@ return view.extend({
 			_('Push these settings to the SoC on boot and whenever they are saved. ' +
 			  'When disabled, the firmware defaults are used.'));
 
+		o = s.option(form.Flag, 'turbo_mode', _('Turbo mode'),
+			_('For a coax with exactly two MoCA nodes: less protocol overhead, ' +
+			  'which the MoCA specification puts at 25% more throughput. With a ' +
+			  'third node on the coax this node does not join the network.'));
+		o.rmempty = false;
+		o.depends('enabled', '1');
+
 		o = s.option(form.Value, 'lof', _('Last operating frequency'),
 			_('Beacon channel, in MHz.'));
 		o.datatype = 'range(0,1600)';
@@ -154,7 +161,6 @@ return view.extend({
 			[ 'tx_priority_per', _('TX priority PER'), '0', 15 ],
 			[ 'tlp_min', _('TLP min'), '0', 255 ],
 			[ 'tlp_max', _('TLP max'), '95', 255 ],
-			[ 'turbo_mode', _('Turbo mode'), '0', 1 ],
 			[ 'num_channels', _('Number of channels'), '5', 5 ],
 			[ 'strip_vlan_tag', _('Strip VLAN tag'), '0', 65535 ]
 		].forEach(function(r) {
