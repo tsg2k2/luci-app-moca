@@ -116,6 +116,7 @@ return view.extend({
 		var open = {};
 		var container = E('div', { 'class': 'cbi-map' }, [
 			E('h2', {}, _('MoCA 2.5 Status')),
+			E('div', { 'id': 'moca-privacy' }),
 			E('div', { 'class': 'cbi-section' }, [
 				E('div', { 'id': 'moca-overview' })
 			]),
@@ -130,7 +131,25 @@ return view.extend({
 			])
 		]);
 
+		/* Coax is a shared medium: without privacy, anything that reaches the cable joins the LAN. */
+		function updatePrivacy(d) {
+			var el = container.querySelector('#moca-privacy');
+			el.innerHTML = '';
+			if (d.moca_link_status !== 'up' || d.moca_security_enabled !== '0')
+				return;
+			el.appendChild(E('div', { 'class': 'alert-message warning' }, [
+				E('strong', {}, _('MoCA privacy is off.')), ' ',
+				_('Traffic on the coax is not encrypted, and any MoCA device that reaches the cable joins this ' +
+				  'network. Coax can run past your home: a shared building line, or an entry point without a ' +
+				  'MoCA filter (often called a PoE filter). Turn on privacy with the same password on every ' +
+				  'MoCA device under '),
+				E('a', { 'href': L.url('admin/network/moca/config') }, _('Configuration')),
+				_(', and fit a filter where the cable enters the home.')
+			]));
+		}
+
 		function updateOverview(d, q) {
+			updatePrivacy(d);
 			var rows = OVERVIEW.map(function(r) {
 				var v = d[r[0]];
 				if (r[2] && v && v != '–')
