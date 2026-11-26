@@ -109,3 +109,48 @@ req/rsp = request/response byte length; per-node commands take the node id as wo
 | 0x2000c | StartDaemon | 0x210 | 0 |
 | 0x2000f | StandaloneLowPowerMode | 0 | 0 |
 | 0x20010 | SetApplicationTrace | 4 | 0 |
+
+## Reply layouts used by the status page (verified on firmware 1.18.16)
+
+Words are 32-bit as `moca_cmd` prints them. 64-bit counters are two words,
+high half first.
+
+**Do not probe unknown argument values.** `0x1010020 <node> 0x22 1` stops the
+SoC firmware until the driver reloads it (a coax drop of about a minute).
+Several stats requests clear their counters when word 0 is 1: frame stats
+0x1010014, aggregate stats 0x1010010, and the other `<cmd> 0x0` stats.
+
+- **0x1010015 GetLocalInfo** (no args): w0 this node, w1 NC, w2 next NC,
+  w3 backup NC, w5 link up, w8 role (0 search, 2 client, else NC),
+  w11 network MoCA version, w12 active node mask.
+- **0x1010016 GetNetInfo** `<node>`: w0-w1 MAC, w2 node state (0 inactive,
+  1 assigned, 2 MAP active, 3 admitted, 4 active, 5 low-power idle,
+  6 standby, 7 sleep), w4 MoCA version; u64 at w6 TX ctl good, w8 TX ctl
+  errors, w12 RX ctl good, w14 + w16 RX ctl bad, w18 TX data good, w20 TX
+  data dropped, w22 RX data good, w24 RX data bad.
+- **0x1010022 GetPhyNode** `<node>`: w0 valid, w1 frequency offset (s32),
+  w3 propagation delay (s32, -1 before ranging), w4 valid TX profile mask.
+- **0x1010020 GetPhyTxProfile / 0x1010021 GetPhyRxProfile**
+  `<node> <type | channel << 16> <detail>`. Type 0x21 = MoCA 2.5 link,
+  channel 0-4; 0xe = broadcast, 0xc = MAP. Also answering on 1.18.16:
+  0x1, 0x2, 0x11, 0x15. detail 1 adds the bit-loading table. w0 = valid.
+  - TX: w10 TX power reduction dB (TX power = 5 - min(w10, 30) dBm),
+    w12 PHY rate bits/s, w15-w78 bit loading.
+  - RX: w15 PHY rate bits/s, w16 receive power (s32, dBm), w18-w81 bit
+    loading, w82 SNR (dB).
+  - Bit loading: 64 words x 8 nibbles, low nibble first = subcarriers 0-511
+    of the channel, value = bits on that subcarrier.
+- **0x1010024 GetPhyMisc**: w1 beacon channel MHz.
+- **0x101007f GetM25PhyMisc**: w2 first MoCA 2.5 channel MHz, w3 channel
+  count (100 MHz apart).
+- **0x1010014 GetFrameStats** `0x0`: 54 u64 counters, 6 blocks (TX, TX
+  errors, unknown, RX, RX errors, RX dropped) of 9 (MAP, RR, LCF, beacon,
+  ACF, probe, Eth, OFDMA RR, OFDMA EVM); counter (block k, type t) at
+  w 2*(9k+t).
+- **0x1010010 GetAggrStats** `0x0`: w0-w159 TX, w160-w319 RX; word i =
+  frames that carried i+1 packets.
+- **0x101007e GetMacDataStats** `0x0`: word n = TX packets to node n.
+- **0x101001c GetSpectrum** `1`/`0` enters/leaves fast capture mode; the
+  spectrum itself comes from ACA requests (0x101001a), which are network
+  transactions. Not used by the app.
+- **0x1010023 GetPhyEvm**: argument layout unknown; not used.

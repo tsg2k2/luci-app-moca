@@ -589,11 +589,92 @@ method_node_cmd() {
 	case "$cmd" in *[!0-9a-fA-FxX\ ]*)
 		json_init; json_add_string error "bad cmd"; json_dump; return ;;
 	esac
-	if echo "$cmd" > "$d/moca_cmd" 2>/dev/null; then
-		json_init; json_add_string resp "$(cat "$d/moca_cmd" 2>/dev/null)"; json_dump
+	local resp
+	if resp="$(moca_cmd_locked "$d" "$cmd")"; then
+		json_init; json_add_string resp "$resp"; json_dump
 	else
 		json_init; json_add_string error "cmd rejected by driver"; json_dump
 	fi
+}
+
+# The driver keeps one reply buffer for moca_cmd: a write followed by a read
+# must not interleave with another caller's, so every use takes this lock.
+MOCA_CMD_LOCK=/var/lock/moca_cmd
+
+moca_cmd_locked() {
+	local d="$1" cmd="$2" rc=0 out=""
+	lock "$MOCA_CMD_LOCK"
+	if echo "$cmd" > "$d/moca_cmd" 2>/dev/null; then
+		out="$(cat "$d/moca_cmd" 2>/dev/null)"
+	else
+		rc=1
+	fi
+	lock -u "$MOCA_CMD_LOCK"
+	[ "$rc" = 0 ] && echo "$out"
+	return $rc
+}
+
+# Read-only SoC requests, checked word by word: the SoC trusts its arguments
+# (an unknown profile type stops its firmware until the driver reloads it),
+# and several stats commands clear their counters when word 0 is 1. Password
+# reads (GetSecPassword, GetSecInfo, GetEnhancedSecInfo) are never allowed.
+# Profile types seen working on firmware 1.18.16: 0x1/0x2/0xc/0xe/0x11/0x15
+# and 0x21 (MoCA 2.5, channel 0-4 in bits 16+).
+moca_read_ok() {
+	local id="$1" a="$2" b="$3" c="$4" n="$5" t ch
+	is_num() { case "$1" in ""|*[!0-9a-fA-FxX]*) return 1 ;; esac; printf '%d' "$1" >/dev/null 2>&1; }
+	for t in "$a" "$b" "$c"; do [ -z "$t" ] || is_num "$t" || return 1; done
+	node_ok() { is_num "$1" && [ "$(printf '%d' "$1")" -le 15 ]; }
+	zero() { [ -z "$1" ] || [ "$(printf '%d' "$1")" = 0 ]; }
+	case "$id" in
+	0x1010001|0x1010009|0x1010015|0x1010024|0x101007f|0x1010027|0x1010032|0x1010092)
+		[ "$n" -le 1 ] ;;
+	0x1010016|0x1010022|0x101000b|0x1010033)
+		[ "$n" = 2 ] && node_ok "$a" ;;
+	0x1010010|0x1010011|0x1010013|0x1010014|0x1010026|0x1010052|0x1010054|0x1010056|0x1010072|0x101007e|0x1010093)
+		[ "$n" -le 2 ] && zero "$a" ;;
+	0x1010020|0x1010021)
+		[ "$n" = 4 ] && node_ok "$a" || return 1
+		t=$(( $(printf '%d' "$b") & 0xffff )); ch=$(( $(printf '%d' "$b") >> 16 ))
+		case "$t" in 1|2|12|14|17|21) [ "$ch" = 0 ] ;; 33) [ "$ch" -le 4 ] ;; *) return 1 ;; esac || return 1
+		case "$(printf '%d' "$c")" in 0|1) ;; *) return 1 ;; esac ;;
+	0x101001d)
+		[ "$n" = 3 ] && [ "$(printf '%d' "$a")" -ge 1 ] && [ "$(printf '%d' "$a")" -le 65535 ] &&
+			[ "$(printf '%d' "$b")" = 2 ] ;;
+	*) return 1 ;;
+	esac
+}
+
+# Read access: run read-only SoC commands. Input {cmds: "<cmd> [words];..."},
+# up to 64 requests, each "<cmdid> [hex words]". Returns {resp: [line, ...]}
+# in the same order; a refused or failed request gives "" in its place.
+method_stat() {
+	local input cmds d one id n=0
+	read -r input; json_load "$input"
+	json_get_var cmds cmds
+	d="$(local_moca_dir)"
+	[ -n "$d" ] && [ -n "$cmds" ] || {
+		json_init; json_add_string error "no moca dev / cmds"; json_dump; return; }
+	case "$cmds" in *[!0-9a-fA-FxX\ \;]*)
+		json_init; json_add_string error "bad cmds"; json_dump; return ;;
+	esac
+	json_init
+	json_add_array resp
+	local IFS=';'
+	for one in $cmds; do
+		n=$((n + 1)); [ $n -le 64 ] || break
+		IFS=' '
+		set -- $one
+		id="$(printf '0x%x' "$1" 2>/dev/null)"
+		if [ $# -le 4 ] && moca_read_ok "$id" "$2" "$3" "$4" $#; then
+			json_add_string "" "$(moca_cmd_locked "$d" "$one")"
+		else
+			json_add_string "" ""
+		fi
+		IFS=';'
+	done
+	json_close_array
+	json_dump
 }
 
 # Emit the adapter inventory (without passwords).
@@ -791,6 +872,9 @@ case "$1" in
 		json_add_object node_cmd
 		json_add_string cmd ""
 		json_close_object
+		json_add_object stat
+		json_add_string cmds ""
+		json_close_object
 		json_add_object adopt
 		json_add_string mac ""
 		json_add_string ip ""
@@ -816,6 +900,7 @@ case "$1" in
 			mps_start)  method_mps_start ;;
 			mps_status) method_mps_status ;;
 			node_cmd)   method_node_cmd ;;
+			stat)       method_stat ;;
 			adopt)      method_adopt ;;
 			*) json_init; json_add_string error "unknown method"; json_dump ;;
 		esac

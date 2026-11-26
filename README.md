@@ -8,6 +8,14 @@ IDs, MoCA version, LOF, firmware build, and the live **per-node PHY-rate
 matrix** (asymmetric TX/RX, ~3.5 Gbps on MoCA 2.5).  All values are read from
 the driver's `moca_*` sysfs attributes and auto-refresh.
 
+The status page also shows link quality per node: RX/TX PHY rate, receive
+power, SNR and TX power per 100 MHz channel, and error counters, plus the
+next and backup network coordinator and the channel plan.  The node dialog
+(Coax nodes → Details) draws the bit loading of every channel, RX or TX.
+These come from read-only SoC requests that rpcd checks word by word
+(`ubus call moca stat '{"cmds":"<cmd> [words];..."}'`), so a LuCI user with
+read access sees them without the raw command console.
+
 ## Build
 
 Add as a feed and install:

@@ -3,6 +3,7 @@
 'require ui';
 'require rpc';
 'require poll';
+'require moca.phy as phy';
 
 /*
  * Coax nodes — the whole MoCA network as seen by the router's own chip over
@@ -40,9 +41,38 @@ function decNetInfo(w) {
 }
 function decBeacon(w) { return (w.length >= 2) ? ('power=' + w[0] + '  backoff=' + w[1]) : ''; }
 function decPhyNode(w) {
-	function s32(x) { return (x >>> 31) ? (x - 0x100000000) : x; }
-	if (w.length < 5) return '';
-	return 'valid=' + w[0] + '  vals=[' + s32(w[1]) + ', ' + s32(w[2]) + ', ' + s32(w[3]) + ', ' + s32(w[4]) + ']';
+	if (w.length < 5 || !w[0]) return '';
+	return 'freq offset=' + phy.s32(w[1]) + '  prop delay=' + phy.s32(w[3]) +
+		'  TX profiles=0x' + w[4].toString(16);
+}
+function decTxProf(w) {
+	var t = phy.decTx(w);
+	return t ? ('rate=' + Math.round(t.rate / 1e6) + ' Mbit/s  TX power=' + t.power + ' dBm (-' + t.reduction + ' dB)') : '';
+}
+function decRxProf(w) {
+	var r = phy.decRx(w);
+	return r ? ('rate=' + Math.round(r.rate / 1e6) + ' Mbit/s  RX power=' + r.power + ' dBm  SNR=' + r.snr + ' dB') : '';
+}
+function decPhyMisc(w) { return (w.length >= 2) ? ('beacon channel ' + w[1] + ' MHz') : ''; }
+/* Frame stats: 6 blocks (TX, TX err, ?, RX, RX err, RX dropped) of 9 u64 counters
+ * (MAP, RR, LCF, beacon, ACF, probe, Eth, OFDMA RR, OFDMA EVM). */
+function decFrames(w) {
+	if (w.length < 108) return '';
+	function c(k, t) { return phy.u64(w, 2 * (9 * k + t)); }
+	function tot(k) { var s = 0; for (var t = 0; t < 9; t++) s += c(k, t); return s; }
+	return 'TX=' + tot(0) + ' err=' + tot(1) + ' | RX=' + tot(3) + ' err=' + tot(4) + ' dropped=' + tot(5);
+}
+function decMacData(w) {
+	var out = [];
+	for (var n = 0; n < 16 && n < w.length; n++) if (w[n]) out.push('n' + n + '=' + w[n]);
+	return 'TX packets per node: ' + (out.length ? out.join(' ') : 'none');
+}
+/* Aggregation histograms: word i = frames carrying i+1 packets, TX 0..159, RX 160..319. */
+function decAggr(w) {
+	if (w.length < 320) return '';
+	var tf = 0, tp = 0, rf = 0, rp = 0;
+	for (var i = 0; i < 160; i++) { tf += w[i]; tp += (i + 1) * w[i]; rf += w[160 + i]; rp += (i + 1) * w[160 + i]; }
+	return 'TX ' + tp + ' pkts in ' + tf + ' frames | RX ' + rp + ' pkts in ' + rf + ' frames';
 }
 function decWord0(w) { return (w.length >= 1) ? ('= ' + w[0] + ' (0x' + w[0].toString(16) + ')') : ''; }
 function decSoc(w) {
@@ -94,16 +124,14 @@ var MOCA_CMDS = [
 	{ g: 'phy', ov: 1, name: _('Net info'),  d: decNetInfo, b: function(n) { return ['0x1010016', mwHex(n)]; } },
 	{ g: 'phy', ov: 1, name: _('PHY node'),  d: decPhyNode, b: function(n) { return ['0x1010022', mwHex(n)]; } },
 	{ g: 'phy', ov: 1, name: _('FMR rates'), b: function(n) { return ['0x101001d', mwHex(1 << n), '0x2']; } },
-	{ g: 'phy', name: _('PHY EVM / SNR'),    b: function(n) { return ['0x1010023', mwHex(n), '0x0']; } },
-	{ g: 'phy', name: _('PHY misc'),         b: function() { return ['0x1010024']; } },
-	{ g: 'phy', name: _('Tx profile'),       b: function(n) { return ['0x1010020', mwHex(n), '0x0', '0x0']; } },
-	{ g: 'phy', name: _('Rx profile'),       b: function(n) { return ['0x1010021', mwHex(n), '0x0', '0x0']; } },
-	{ g: 'phy', name: _('Spectrum'),         b: function(n) { return ['0x101001c', mwHex(n)]; } },
+	{ g: 'phy', name: _('PHY misc'),   d: decPhyMisc, b: function() { return ['0x1010024']; } },
+	{ g: 'phy', ov: 1, name: _('Tx profile'), d: decTxProf, b: function(n) { return ['0x1010020', mwHex(n), '0x21', '0x0']; } },
+	{ g: 'phy', ov: 1, name: _('Rx profile'), d: decRxProf, b: function(n) { return ['0x1010021', mwHex(n), '0x21', '0x0']; } },
 	{ g: 'stats', ov: 1, name: _('Data stats'), d: decDataStats, b: function(n) { return ['0x101000b', mwHex(n)]; } },
 	{ g: 'stats', ov: 1, name: _('L2ME stats'), d: decL2me, b: function() { return ['0x1010056', '0x0']; } },
-	{ g: 'stats', name: _('MAC data stats'),    b: function() { return ['0x101007e', '0x0']; } },
-	{ g: 'stats', name: _('Aggregate stats'),   b: function() { return ['0x1010010', '0x0']; } },
-	{ g: 'stats', name: _('Frame stats'),       b: function() { return ['0x1010014', '0x0']; } },
+	{ g: 'stats', name: _('MAC data stats'), d: decMacData, b: function() { return ['0x101007e', '0x0']; } },
+	{ g: 'stats', name: _('Aggregate stats'), d: decAggr, b: function() { return ['0x1010010', '0x0']; } },
+	{ g: 'stats', name: _('Frame stats'), d: decFrames, b: function() { return ['0x1010014', '0x0']; } },
 	{ g: 'stats', name: _('Retransmit stats'),  d: decRetx, b: function() { return ['0x1010026', '0x0']; } },
 	{ g: 'stats', name: _('Fragmentation stats'), d: decFrag, b: function() { return ['0x1010054', '0x0']; } },
 	{ g: 'stats', name: _('ECB stats'),         d: decEcb, b: function() { return ['0x1010093', '0x0']; } },
@@ -145,6 +173,34 @@ function mocaRun(c, node, vals) {
 		var dec = c.d ? c.d(p.words) : (p.words.length === 1 ? decWord0(p.words) : '');
 		return (dec ? dec + '   ' : '') + '[' + p.bytes + 'B] ' + mwWords(p.words);
 	});
+}
+
+/* Bit loading of one channel as an SVG column chart, 0..10 bits. */
+function bitChart(bits, title) {
+	var W = 512, H = 80, ns = 'http://www.w3.org/2000/svg';
+	var svg = document.createElementNS(ns, 'svg');
+	svg.setAttribute('viewBox', '0 0 ' + W + ' ' + (H + 2));
+	svg.setAttribute('preserveAspectRatio', 'none');
+	svg.setAttribute('style', 'width:100%;height:90px;display:block;color:var(--primary-color-high, #3b7dd8)');
+	[ 2, 4, 6, 8, 10 ].forEach(function(b) {
+		var y = H - b * H / 10;
+		var l = document.createElementNS(ns, 'line');
+		l.setAttribute('x1', 0); l.setAttribute('x2', W); l.setAttribute('y1', y); l.setAttribute('y2', y);
+		l.setAttribute('stroke', 'currentColor'); l.setAttribute('stroke-opacity', '0.15');
+		l.setAttribute('stroke-width', '0.5'); l.setAttribute('vector-effect', 'non-scaling-stroke');
+		svg.appendChild(l);
+	});
+	var d = '';
+	bits.forEach(function(b, i) { if (b) d += 'M' + i + ' ' + H + 'v-' + (b * H / 10) + 'h1v' + (b * H / 10) + 'z'; });
+	var p = document.createElementNS(ns, 'path');
+	p.setAttribute('d', d); p.setAttribute('fill', 'currentColor');
+	svg.appendChild(p);
+	var used = bits.filter(function(b) { return b; });
+	var avg = used.length ? (used.reduce(function(a, b) { return a + b; }, 0) / used.length).toFixed(1) : '0';
+	return E('div', { 'style': 'margin:.6em 0' }, [
+		E('div', { 'style': 'font-size:90%' },
+			_('%s: %d of 512 subcarriers used, %s bits average').format(title, used.length, avg)),
+		svg ]);
 }
 
 function mocaNodeDialog(node, guid) {
@@ -214,6 +270,34 @@ function mocaNodeDialog(node, guid) {
 		});
 		panes[g].appendChild(tbl);
 	});
+
+	addTab('bits', _('Bit loading'));
+	var bitsOut = E('div');
+	function loadBits(dir) {
+		bitsOut.innerHTML = '';
+		bitsOut.appendChild(E('em', {}, _('Reading…')));
+		phy.linkBitLoading(node, dir, 5).then(function(chs) {
+			bitsOut.innerHTML = '';
+			var any = false;
+			chs.forEach(function(bits, ch) {
+				if (!bits) return;
+				any = true;
+				bitsOut.appendChild(bitChart(bits, _('Channel %d').format(ch)));
+			});
+			if (!any)
+				bitsOut.appendChild(E('em', {}, _('No profile for this link (this router, or the node is not admitted).')));
+		});
+	}
+	var bitsRx = E('button', { 'class': 'cbi-button cbi-button-action' }, _('RX from this node'));
+	var bitsTx = E('button', { 'class': 'cbi-button cbi-button-action', 'style': 'margin-left:.4em' }, _('TX to this node'));
+	bitsRx.addEventListener('click', function() { loadBits('rx'); });
+	bitsTx.addEventListener('click', function() { loadBits('tx'); });
+	panes.bits.appendChild(E('div', {}, [
+		E('p', { 'class': 'cbi-value-description' },
+			_('Bits per subcarrier on each 100 MHz channel (512 subcarriers, up to 10 bits). Gaps at 0 are ' +
+			  'unused or notched subcarriers; a dip across many subcarriers points at noise or a reflection ' +
+			  'at those frequencies.')),
+		bitsRx, bitsTx, bitsOut ]));
 
 	addTab('raw', _('Raw command'));
 	var rin = E('input', { 'type': 'text', 'class': 'cbi-input-text',

@@ -6,7 +6,7 @@
 				"/sys/devices/platform/*/mdio_bus/*/*:0f/moca_*": [ "read" ]
 			},
 			"ubus": {
-				"moca": [ "list", "get", "census", "scan_status", "mps_status" ]
+				"moca": [ "list", "get", "census", "scan_status", "mps_status", "stat" ]
 			},
 			"uci": [ "moca" ]
 		},
