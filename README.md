@@ -17,6 +17,13 @@ probe, or the noise floor with nobody sending (write access only, since each
 100 MHz block is a short coax-network transaction).  With a `phy-mxl371x`
 that has `moca_link_uptime`, the status page shows how long the coax link has
 been up and how often it dropped.
+
+With luci-app-statistics and collectd-mod-exec installed, a collectd exec
+input (`/usr/libexec/collectd/moca_collectd.sh`, added on first boot by
+uci-defaults) records the link uptime, drops and dropped frames, and per node
+the PHY rate, receive and transmit power and SNR (Statistics → Graphs →
+MoCA). It reads only sysfs, so it runs as nobody; power and SNR need a
+`phy-mxl371x` with `moca_link_quality`, an older one gives the rates only.
 These come from read-only SoC requests that rpcd checks word by word
 (`ubus call moca stat '{"cmds":"<cmd> [words];..."}'`), so a LuCI user with
 read access sees them without the raw command console.

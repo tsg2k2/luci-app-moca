@@ -1,0 +1,18 @@
+#!/bin/sh
+# Hand the MoCA link metrics to luci-app-statistics (Statistics -> Graphs -> MoCA): add the
+# collectd exec input once, and turn the exec plugin on, when both are installed. An existing
+# input for the script is left as it is, and so is everything else.
+
+[ -f /etc/config/luci_statistics ] || exit 0
+[ -e /usr/lib/collectd/exec.so ] || exit 0
+
+CMD=/usr/libexec/collectd/moca_collectd.sh
+uci -q show luci_statistics | grep -q "\.cmdline='$CMD'" && exit 0
+
+uci -q get luci_statistics.collectd_exec >/dev/null ||
+	uci set luci_statistics.collectd_exec=statistics
+uci set luci_statistics.collectd_exec.enable=1
+s=$(uci add luci_statistics collectd_exec_input)
+uci set luci_statistics.$s.cmdline="$CMD"
+uci commit luci_statistics
+exit 0
