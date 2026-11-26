@@ -7,9 +7,19 @@
 /* CR1000A MXL3711 MoCA PHY sysfs directory. */
 var BASE = '/sys/devices/platform/soc@0/90000.mdio/mdio_bus/90000.mdio-1/90000.mdio-1:0f';
 
+/* Seconds as "2d 3h 4m 5s"; older drivers lack the attribute ("–"). */
+function duration(v) {
+	var t = parseInt(v, 10);
+	if (isNaN(t)) return v;
+	var d = Math.floor(t / 86400), h = Math.floor(t / 3600) % 24, m = Math.floor(t / 60) % 60;
+	return (d ? d + 'd ' : '') + (d || h ? h + 'h ' : '') + (d || h || m ? m + 'm ' : '') + (t % 60) + 's';
+}
+
 /* [ sysfs attribute, label, optional formatter ] */
 var OVERVIEW = [
 	[ 'moca_link_status',      _('Link status') ],
+	[ 'moca_link_uptime',      _('Link up for'), duration ],
+	[ 'moca_link_lost',        _('Link drops since boot') ],
 	[ 'moca_phy_rate',         _('PHY rate (to NC)'), function(v) { return v + ' Mbps'; } ],
 	[ 'moca_network_state',    _('Network state') ],
 	[ 'moca_version',          _('MoCA version') ],

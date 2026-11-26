@@ -12,7 +12,7 @@
 		},
 		"write": {
 			"ubus": {
-				"moca": [ "request", "discover", "adopt", "node_reset", "node_cmd", "scan", "mps_start", "readdress" ]
+				"moca": [ "request", "discover", "adopt", "node_reset", "node_cmd", "spectrum", "scan", "mps_start", "readdress" ]
 			},
 			"uci": [ "moca", "moca_other", "dhcp" ]
 		}

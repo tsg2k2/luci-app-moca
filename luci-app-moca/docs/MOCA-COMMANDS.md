@@ -150,7 +150,25 @@ Several stats requests clear their counters when word 0 is 1: frame stats
 - **0x1010010 GetAggrStats** `0x0`: w0-w159 TX, w160-w319 RX; word i =
   frames that carried i+1 packets.
 - **0x101007e GetMacDataStats** `0x0`: word n = TX packets to node n.
-- **0x101001c GetSpectrum** `1`/`0` enters/leaves fast capture mode; the
-  spectrum itself comes from ACA requests (0x101001a), which are network
-  transactions. Not used by the app.
-- **0x1010023 GetPhyEvm**: argument layout unknown; not used.
+- **Spectrum** (node dialog, Spectrum tab; rpcd `spectrum`, write access):
+  `0x101001c 1` enters fast capture mode, then one ACA request per 100 MHz
+  block, then `0x101001c 0`. Every reply word 0 = 1 means OK.
+  - **0x101001a RequestLmo** `[5, src, blk+2, node, 1<<self]`: `blk` = block
+    start in 25 MHz units (400-1750 MHz, 4 per block); `src` 1 = `node` sends a
+    probe (shows the coax response from that node), 0 = nobody sends (noise
+    floor); `self` = this router's node id. About 1.2 s per block; the other
+    nodes stay admitted.
+  - Reply (544 bytes): w2 result (0 = OK), w5 ACA status (nonzero = busy,
+    retry), low byte of w6 = reference, bytes 0x20-0x21f = 512 bins of
+    195 kHz, **big-endian within each word**. Level = (s8)(ref - bin); the
+    absolute scale is not confirmed. A reference
+    of -128 (0x80) means no data (seen for 400-500 MHz).
+- **0x1010023 GetPhyEvm** `[a, b]`: accepted, 516-byte reply, but all zeros
+  for every tried layout (node 0/1/3 with probe type 0x13/0x1c/0x1d/0x1e,
+  channel 0-4, swapped order), during normal running and through a full
+  re-admission (about 8,000 requests); this firmware likely does not fill
+  it. Not used.
+- **0x20006 GetCdInfo** (uptime, link uptime, link-lost count) is a
+  host-driver command, not a SoC one; the passthrough sends only
+  the low 16 bits, so the SoC sees 0x0006 and answers "unknown command".
+  phy-mxl371x keeps `moca_link_uptime` and `moca_link_lost` itself instead.

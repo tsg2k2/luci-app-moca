@@ -11,7 +11,12 @@ the driver's `moca_*` sysfs attributes and auto-refresh.
 The status page also shows link quality per node: RX/TX PHY rate, receive
 power, SNR and TX power per 100 MHz channel, and error counters, plus the
 next and backup network coordinator and the channel plan.  The node dialog
-(Coax nodes → Details) draws the bit loading of every channel, RX or TX.
+(Coax nodes → Details) draws the bit loading of every channel, RX or TX,
+and a spectrum sweep: what this router receives while a chosen node sends a
+probe, or the noise floor with nobody sending (write access only, since each
+100 MHz block is a short coax-network transaction).  With a `phy-mxl371x`
+that has `moca_link_uptime`, the status page shows how long the coax link has
+been up and how often it dropped.
 These come from read-only SoC requests that rpcd checks word by word
 (`ubus call moca stat '{"cmds":"<cmd> [words];..."}'`), so a LuCI user with
 read access sees them without the raw command console.

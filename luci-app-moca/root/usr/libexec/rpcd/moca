@@ -677,6 +677,66 @@ method_stat() {
 	json_dump
 }
 
+# Spectrum sweep: the chip measures what it receives in each 100 MHz block,
+# with the given node sending a probe (node 0-15) or with no sender (node "",
+# noise floor). Each block is an ACA request, a network transaction that
+# takes about a second, so this is write access and a bounded range.
+method_spectrum() {
+	local input node start end d me blk last w2 out tries r st
+	read -r input; json_load "$input"
+	json_get_var node node
+	json_get_var start start
+	json_get_var end end
+	d="$(local_moca_dir)"
+	[ -n "$d" ] || { json_init; json_add_string error "no moca dev"; json_dump; return; }
+	[ "$(cat "$d/moca_link_status" 2>/dev/null)" = up ] || {
+		json_init; json_add_string error "coax link down"; json_dump; return; }
+	case "$node$start$end" in *[!0-9]*)
+		json_init; json_add_string error "bad arguments"; json_dump; return ;;
+	esac
+	[ -n "$node" ] && { [ "$node" -le 15 ] || {
+		json_init; json_add_string error "bad node"; json_dump; return; }; }
+	[ -n "$start" ] && [ -n "$end" ] && [ "$start" -ge 400 ] && [ "$end" -le 1750 ] &&
+	[ "$start" -lt "$end" ] && [ $(( (end - start) / 100 )) -le 12 ] || {
+		json_init; json_add_string error "range must be inside 400-1750 MHz, at most 1200 MHz wide"
+		json_dump; return; }
+	me="$(cat "$d/moca_node_id" 2>/dev/null)"
+	case "$me" in ''|*[!0-9]*) json_init; json_add_string error "no node id"; json_dump; return ;; esac
+	[ "$me" -le 15 ] || { json_init; json_add_string error "no node id"; json_dump; return; }
+	[ "$node" = "$me" ] && { json_init; json_add_string error "that is this router"; json_dump; return; }
+	json_init
+	json_add_int node_id "$me"
+	json_add_array blocks
+	lock "$MOCA_CMD_LOCK"
+	echo "0x101001c 1" > "$d/moca_cmd" 2>/dev/null
+	blk=$((start / 25)); last=$(((end + 24) / 25))
+	while [ $blk -lt $last ]; do
+		tries=0; out=""
+		while [ $tries -lt 3 ]; do
+			tries=$((tries + 1))
+			if [ -n "$node" ]; then
+				r="0x101001a 5 1 $(printf %x $((blk + 2))) $(printf %x "$node") $(printf %x $((1 << me)))"
+			else
+				r="0x101001a 5 0 $(printf %x $((blk + 2))) 0 $(printf %x $((1 << me)))"
+			fi
+			echo "$r" > "$d/moca_cmd" 2>/dev/null && out="$(cat "$d/moca_cmd" 2>/dev/null)" || out=""
+			set -- $out
+			# words: $4 = result, $7 = ACA status; retry a busy network
+			[ $# -ge 136 ] && [ "$4" = 00000000 ] && [ "$7" = 00000000 ] && break
+			out=""; sleep 2
+		done
+		json_add_object ""
+		json_add_int blk "$blk"
+		json_add_string resp "$out"
+		json_close_object
+		blk=$((blk + 4))
+	done
+	echo "0x101001c 0" > "$d/moca_cmd" 2>/dev/null
+	lock -u "$MOCA_CMD_LOCK"
+	json_close_array
+	json_dump
+}
+
 # Emit the adapter inventory (without passwords).
 method_list() {
 	json_init
@@ -875,6 +935,11 @@ case "$1" in
 		json_add_object stat
 		json_add_string cmds ""
 		json_close_object
+		json_add_object spectrum
+		json_add_string node ""
+		json_add_int start 0
+		json_add_int end 0
+		json_close_object
 		json_add_object adopt
 		json_add_string mac ""
 		json_add_string ip ""
@@ -901,6 +966,7 @@ case "$1" in
 			mps_status) method_mps_status ;;
 			node_cmd)   method_node_cmd ;;
 			stat)       method_stat ;;
+			spectrum)   method_spectrum ;;
 			adopt)      method_adopt ;;
 			*) json_init; json_add_string error "unknown method"; json_dump ;;
 		esac

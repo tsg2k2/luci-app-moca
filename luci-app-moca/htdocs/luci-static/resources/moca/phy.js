@@ -17,6 +17,7 @@
  */
 
 var callStat = rpc.declare({ object: 'moca', method: 'stat', params: [ 'cmds' ], expect: { resp: [] } });
+var callSpectrum = rpc.declare({ object: 'moca', method: 'spectrum', params: [ 'node', 'start', 'end' ], expect: {} });
 
 var NODE_STATE = [ _('inactive'), _('assigned'), _('MAP active'), _('admitted'), _('active'),
 	_('low-power idle'), _('standby'), _('sleep') ];
@@ -128,12 +129,39 @@ function linkBitLoading(node, dir, nch) {
 	});
 }
 
+/*
+ * Spectrum sweep (ACA). Each 100 MHz block reply: w2 result, w5 ACA status,
+ * low byte of w6 the reference, bytes 0x20..0x21f 512 bins of 195 kHz
+ * (big-endian within each word).
+ * Level of bin i = (s8)(ref - bin[i]); a
+ * reference of -128 means the block carried no data. Resolves to
+ * { node_id, points: [ [MHz, level] ], missing: [ MHz ] } or { error }.
+ */
+function spectrum(node, start, end) {
+	return callSpectrum(node == null ? '' : String(node), start, end).then(function(r) {
+		if (!r || r.error) return { error: (r && r.error) || _('no reply') };
+		var pts = [], missing = [];
+		(r.blocks || []).forEach(function(b) {
+			var f0 = b.blk * 25, w = parse(b.resp);
+			if (!w || w.length < 136 || (w[6] & 0xff) === 0x80) { missing.push(f0); return; }
+			var ref = w[6] & 0xff;
+			for (var i = 0; i < 512; i++) {
+				var bin = (w[8 + (i >> 2)] >>> (24 - (i & 3) * 8)) & 0xff;	/* big-endian in each word */
+				var f = f0 + i * 100 / 512, v = (ref - bin) & 0xff;
+				if (f >= start && f < end) pts.push([ f, v > 127 ? v - 256 : v ]);
+			}
+		});
+		return { node_id: r.node_id, points: pts, missing: missing };
+	});
+}
+
 return baseclass.extend({
 	run: run,
 	s32: s32,
 	u64: u64,
 	linkQuality: linkQuality,
 	linkBitLoading: linkBitLoading,
+	spectrum: spectrum,
 	decTx: decTx,
 	decRx: decRx,
 	decLocal: decLocal,

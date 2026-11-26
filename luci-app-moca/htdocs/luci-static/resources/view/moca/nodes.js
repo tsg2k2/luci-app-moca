@@ -203,6 +203,48 @@ function bitChart(bits, title) {
 		svg ]);
 }
 
+/* Spectrum as an SVG line, level in dB against MHz. */
+function specChart(pts, title) {
+	var W = 600, H = 160, ns = 'http://www.w3.org/2000/svg';
+	var fmin = pts[0][0], fmax = pts[pts.length - 1][0];
+	var lo = Infinity, hi = -Infinity;
+	pts.forEach(function(p) { lo = Math.min(lo, p[1]); hi = Math.max(hi, p[1]); });
+	lo = Math.floor(lo / 10) * 10; hi = Math.ceil(hi / 10) * 10;
+	if (hi <= lo) hi = lo + 10;
+	var X = function(f) { return (f - fmin) / Math.max(fmax - fmin, 1) * W; };
+	var Y = function(v) { return H - (v - lo) / (hi - lo) * H; };
+	var svg = document.createElementNS(ns, 'svg');
+	svg.setAttribute('viewBox', '-34 -4 ' + (W + 38) + ' ' + (H + 22));
+	svg.setAttribute('style', 'width:100%;height:auto;display:block;color:var(--primary-color-high, #3b7dd8)');
+	function txt(x, y, s, anchor) {
+		var t = document.createElementNS(ns, 'text');
+		t.setAttribute('x', x); t.setAttribute('y', y); t.setAttribute('font-size', '10');
+		t.setAttribute('fill', 'currentColor'); t.setAttribute('fill-opacity', '0.7');
+		t.setAttribute('text-anchor', anchor); t.textContent = s;
+		svg.appendChild(t);
+	}
+	function line(x1, y1, x2, y2) {
+		var l = document.createElementNS(ns, 'line');
+		l.setAttribute('x1', x1); l.setAttribute('x2', x2); l.setAttribute('y1', y1); l.setAttribute('y2', y2);
+		l.setAttribute('stroke', 'currentColor'); l.setAttribute('stroke-opacity', '0.15');
+		l.setAttribute('stroke-width', '0.5'); l.setAttribute('vector-effect', 'non-scaling-stroke');
+		svg.appendChild(l);
+	}
+	for (var v = lo; v <= hi; v += 10) { line(0, Y(v), W, Y(v)); txt(-4, Y(v) + 3, String(v), 'end'); }
+	for (var f = Math.ceil(fmin / 100) * 100; f <= fmax; f += 100) { line(X(f), 0, X(f), H); txt(X(f), H + 14, String(f), 'middle'); }
+	var d = '';
+	pts.forEach(function(p, i) {
+		/* a gap between blocks that returned no data breaks the line */
+		var gap = i && p[0] - pts[i - 1][0] > 1;
+		d += (i && !gap ? 'L' : 'M') + X(p[0]).toFixed(1) + ' ' + Y(p[1]).toFixed(1);
+	});
+	var path = document.createElementNS(ns, 'path');
+	path.setAttribute('d', d); path.setAttribute('fill', 'none'); path.setAttribute('stroke', 'currentColor');
+	path.setAttribute('stroke-width', '1.2'); path.setAttribute('vector-effect', 'non-scaling-stroke');
+	svg.appendChild(path);
+	return E('div', { 'style': 'margin:.6em 0' }, [ E('div', { 'style': 'font-size:90%' }, title), svg ]);
+}
+
 function mocaNodeDialog(node, guid) {
 	var content = E('div');
 	var tabBar = E('ul', { 'class': 'cbi-tabmenu' });
@@ -298,6 +340,46 @@ function mocaNodeDialog(node, guid) {
 			  'unused or notched subcarriers; a dip across many subcarriers points at noise or a reflection ' +
 			  'at those frequencies.')),
 		bitsRx, bitsTx, bitsOut ]));
+
+	addTab('spec', _('Spectrum'));
+	var specOut = E('div');
+	var specFrom = E('input', { 'type': 'number', 'class': 'cbi-input-text', 'style': 'width:6em', 'value': '1100', 'min': '400', 'max': '1750' });
+	var specTo = E('input', { 'type': 'number', 'class': 'cbi-input-text', 'style': 'width:6em', 'value': '1700', 'min': '400', 'max': '1750' });
+	var specBtns = [];
+	function loadSpec(src) {
+		var a = parseInt(specFrom.value, 10), b = parseInt(specTo.value, 10);
+		specOut.innerHTML = '';
+		if (!(a >= 400 && b <= 1750 && a < b && b - a <= 1200)) {
+			specOut.appendChild(E('em', {}, _('Pick a range inside 400-1750 MHz, at most 1200 MHz wide.')));
+			return;
+		}
+		specBtns.forEach(function(x) { x.disabled = true; });
+		specOut.appendChild(E('em', {}, _('Measuring, about one second per 100 MHz…')));
+		phy.spectrum(src, a, b).then(function(r) {
+			specOut.innerHTML = '';
+			if (r.error) { specOut.appendChild(E('em', {}, r.error)); return; }
+			if (!r.points.length) { specOut.appendChild(E('em', {}, _('No data in this range.'))); return; }
+			specOut.appendChild(specChart(r.points, src == null
+				? _('Noise floor at this router, no node sending (dB)')
+				: _('Received at this router while node %d sends a probe (dB)').format(src)));
+			if (r.missing.length)
+				specOut.appendChild(E('div', { 'class': 'cbi-value-description' },
+					_('No data from the blocks starting at %s MHz.').format(r.missing.join(', '))));
+		}).finally(function() { specBtns.forEach(function(x) { x.disabled = false; }); });
+	}
+	var specNode = E('button', { 'class': 'cbi-button cbi-button-action' }, _('Probe from this node'));
+	var specNoise = E('button', { 'class': 'cbi-button cbi-button-action', 'style': 'margin-left:.4em' }, _('Noise floor'));
+	specBtns = [ specNode, specNoise ];
+	specNode.addEventListener('click', function() { loadSpec(node); });
+	specNoise.addEventListener('click', function() { loadSpec(null); });
+	panes.spec.appendChild(E('div', {}, [
+		E('p', { 'class': 'cbi-value-description' },
+			_('What this router receives across the band, 195 kHz per point. "Probe from this node" has that node ' +
+			  'send a test signal, which shows the coax response between the two; "Noise floor" measures with ' +
+			  'nobody sending, which shows interference. Each 100 MHz block is a short coax-network ' +
+			  'transaction. The absolute scale of the levels is not confirmed.')),
+		E('span', {}, [ _('From') + ' ', specFrom, ' ' + _('to') + ' ', specTo, ' MHz ' ]),
+		specNode, specNoise, specOut ]));
 
 	addTab('raw', _('Raw command'));
 	var rin = E('input', { 'type': 'text', 'class': 'cbi-input-text',
